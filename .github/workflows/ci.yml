@@ -65,7 +65,10 @@ jobs:
         run: |
           VERSION=$(grep 'm_EditorVersion:' ProjectSettings/ProjectVersion.txt | awk '{print $2}')
           docker pull "unityci/editor:ubuntu-${VERSION}-linux-il2cpp-3"
-
+      - name: Check license secret
+        run: |
+          echo "length: ${#UNITY_LICENSE}"
+          echo "signature tags: $(echo "$UNITY_LICENSE" | grep -c '<Signature>')"
       - name: Run tests
         uses: game-ci/unity-test-runner@v4
         id: tests
