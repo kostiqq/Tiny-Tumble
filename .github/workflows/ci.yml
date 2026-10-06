@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+#  UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
   UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
   UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
 
@@ -65,10 +65,6 @@ jobs:
         run: |
           VERSION=$(grep 'm_EditorVersion:' ProjectSettings/ProjectVersion.txt | awk '{print $2}')
           docker pull "unityci/editor:ubuntu-${VERSION}-linux-il2cpp-3"
-      - name: Check license secret
-        run: |
-          echo "length: ${#UNITY_LICENSE}"
-          echo "signature tags: $(echo "$UNITY_LICENSE" | grep -c '<Signature>')"
       - name: Run tests
         uses: game-ci/unity-test-runner@v4
         id: tests
