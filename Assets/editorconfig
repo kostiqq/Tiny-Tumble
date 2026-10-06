@@ -1,0 +1,212 @@
+# EditorConfig для Unity-проекта (C#)
+# Кладётся в корень репозитория. Работает в Rider, Visual Studio и VS Code (C# Dev Kit).
+root = true
+
+# ---------------------------------------------------------------
+# Все файлы
+# ---------------------------------------------------------------
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+# Markdown: двойной пробел в конце строки — это перенос, не трогаем
+[*.md]
+trim_trailing_whitespace = false
+
+# JSON, YAML, asmdef, манифесты пакетов
+[*.{json,asmdef,asmref,yml,yaml}]
+indent_size = 2
+
+# Сериализованные Unity-файлы пишет редактор, не форматируем руками
+[*.{unity,prefab,asset,mat,anim,controller,meta,physicMaterial,overrideController,mask,playable,signal,shadervariants,spriteatlas,terrainlayer,lighting}]
+trim_trailing_whitespace = false
+insert_final_newline = false
+
+# Шейдеры
+[*.{shader,hlsl,cginc,compute,shadergraph,shadersubgraph}]
+indent_size = 4
+
+# ---------------------------------------------------------------
+# C#
+# ---------------------------------------------------------------
+[*.cs]
+
+# --- Переносы и скобки (стиль Allman, как в Unity и .NET) ---
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_new_line_between_query_expression_clauses = true
+
+# --- Отступы ---
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_indent_labels = one_less_than_current
+csharp_indent_block_contents = true
+csharp_indent_braces = false
+
+# --- Пробелы ---
+csharp_space_after_cast = false
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_around_binary_operators = before_and_after
+csharp_space_after_comma = true
+csharp_space_before_comma = false
+
+# --- Блоки ---
+csharp_prefer_braces = true:warning
+csharp_preserve_single_line_statements = false
+csharp_preserve_single_line_blocks = true
+
+# --- using ---
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+csharp_using_directive_placement = outside_namespace:warning
+
+# --- Пространства имён ---
+# Unity 6 (C# 9) не поддерживает file-scoped namespace, поэтому блочные.
+csharp_style_namespace_declarations = block_scoped:silent
+
+# --- var ---
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = true:silent
+
+# --- Члены с телом-выражением ---
+csharp_style_expression_bodied_methods = when_on_single_line:silent
+csharp_style_expression_bodied_properties = true:suggestion
+csharp_style_expression_bodied_accessors = true:suggestion
+csharp_style_expression_bodied_constructors = false:silent
+
+# --- Модификаторы ---
+dotnet_style_require_accessibility_modifiers = always:warning
+csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
+dotnet_style_readonly_field = true:suggestion
+
+# --- this. не пишем ---
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+dotnet_style_qualification_for_event = false:suggestion
+
+# --- Ключевые слова вместо типов BCL (int, а не Int32) ---
+dotnet_style_predefined_type_for_locals_parameters_members = true:suggestion
+dotnet_style_predefined_type_for_member_access = true:suggestion
+
+# --- Null-проверки ---
+# ВАЖНО: для наследников UnityEngine.Object операторы ?. и ?? обходят
+# переопределённый == и не видят уничтоженные объекты. Для них пишем
+# явное `if (obj != null)` / `if (obj)`. Поэтому эти правила только silent.
+dotnet_style_coalesce_expression = true:silent
+dotnet_style_null_propagation = true:silent
+csharp_style_conditional_delegate_call = true:silent
+
+# --- Прочее ---
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+csharp_style_pattern_matching_over_is_with_cast_check = true:suggestion
+csharp_style_inlined_variable_declaration = true:suggestion
+csharp_style_deconstructed_variable_declaration = true:suggestion
+
+# ---------------------------------------------------------------
+# Именование
+# ---------------------------------------------------------------
+# Итог:
+#   Типы, методы, свойства, события, константы, public-поля  -> PascalCase
+#   Интерфейсы                                               -> IPascalCase
+#   private/protected поля (в т.ч. [SerializeField])         -> _camelCase
+#   private static поля                                      -> s_camelCase
+#   Параметры и локальные переменные                         -> camelCase
+#   Параметры типов                                          -> TPascalCase
+
+# Символы
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_symbols.type_parameters.applicable_kinds = type_parameter
+dotnet_naming_symbols.types.applicable_kinds = class, struct, enum, delegate
+dotnet_naming_symbols.members.applicable_kinds = method, property, event, local_function
+dotnet_naming_symbols.constants.applicable_kinds = field, local
+dotnet_naming_symbols.constants.required_modifiers = const
+dotnet_naming_symbols.public_fields.applicable_kinds = field
+dotnet_naming_symbols.public_fields.applicable_accessibilities = public, internal
+dotnet_naming_symbols.private_static_fields.applicable_kinds = field
+dotnet_naming_symbols.private_static_fields.applicable_accessibilities = private, protected, private_protected
+dotnet_naming_symbols.private_static_fields.required_modifiers = static
+dotnet_naming_symbols.private_fields.applicable_kinds = field
+dotnet_naming_symbols.private_fields.applicable_accessibilities = private, protected, private_protected
+dotnet_naming_symbols.parameters_locals.applicable_kinds = parameter, local
+
+# Стили
+dotnet_naming_style.pascal.capitalization = pascal_case
+dotnet_naming_style.camel.capitalization = camel_case
+dotnet_naming_style.i_prefix.capitalization = pascal_case
+dotnet_naming_style.i_prefix.required_prefix = I
+dotnet_naming_style.t_prefix.capitalization = pascal_case
+dotnet_naming_style.t_prefix.required_prefix = T
+dotnet_naming_style.underscore_camel.capitalization = camel_case
+dotnet_naming_style.underscore_camel.required_prefix = _
+dotnet_naming_style.s_camel.capitalization = camel_case
+dotnet_naming_style.s_camel.required_prefix = s_
+
+# Правила (порядок важен: от частного к общему)
+dotnet_naming_rule.constants.symbols = constants
+dotnet_naming_rule.constants.style = pascal
+dotnet_naming_rule.constants.severity = warning
+
+dotnet_naming_rule.interfaces.symbols = interfaces
+dotnet_naming_rule.interfaces.style = i_prefix
+dotnet_naming_rule.interfaces.severity = warning
+
+dotnet_naming_rule.type_parameters.symbols = type_parameters
+dotnet_naming_rule.type_parameters.style = t_prefix
+dotnet_naming_rule.type_parameters.severity = warning
+
+dotnet_naming_rule.types.symbols = types
+dotnet_naming_rule.types.style = pascal
+dotnet_naming_rule.types.severity = warning
+
+dotnet_naming_rule.members.symbols = members
+dotnet_naming_rule.members.style = pascal
+dotnet_naming_rule.members.severity = warning
+
+dotnet_naming_rule.private_static_fields.symbols = private_static_fields
+dotnet_naming_rule.private_static_fields.style = s_camel
+dotnet_naming_rule.private_static_fields.severity = warning
+
+dotnet_naming_rule.private_fields.symbols = private_fields
+dotnet_naming_rule.private_fields.style = underscore_camel
+dotnet_naming_rule.private_fields.severity = warning
+
+dotnet_naming_rule.public_fields.symbols = public_fields
+dotnet_naming_rule.public_fields.style = pascal
+dotnet_naming_rule.public_fields.severity = warning
+
+dotnet_naming_rule.parameters_locals.symbols = parameters_locals
+dotnet_naming_rule.parameters_locals.style = camel
+dotnet_naming_rule.parameters_locals.severity = warning
+
+# ---------------------------------------------------------------
+# Анализаторы
+# ---------------------------------------------------------------
+# Unity вызывает Awake/Update/OnValidate и т.п. через рефлексию, а поля
+# с [SerializeField] заполняет редактор. Пакет Microsoft.Unity.Analyzers
+# (ставится вместе с IDE-пакетом Rider/VS) гасит ложные срабатывания
+# IDE0051 / IDE0044 / CS0649 сам. Если его нет — раскомментировать:
+# dotnet_diagnostic.IDE0051.severity = none   # неиспользуемый private-член
+# dotnet_diagnostic.IDE0044.severity = none   # сделать поле readonly
+# dotnet_diagnostic.CS0649.severity = none    # поле никогда не присваивается
+
+dotnet_diagnostic.IDE0005.severity = suggestion   # лишние using
+dotnet_diagnostic.IDE0060.severity = suggestion   # неиспользуемый параметр
+dotnet_diagnostic.CA2016.severity = warning       # пробрасывать CancellationToken
+
+# Код сторонних пакетов и сгенерированный код не проверяем
+[{Library,Packages,Plugins,ThirdParty}/**.cs]
+generated_code = true
+dotnet_analyzer_diagnostic.severity = none
