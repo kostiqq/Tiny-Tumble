@@ -59,6 +59,13 @@ jobs:
           restore-keys: |
             Library-test-
 
+      # Заранее скачиваем образ Unity, чтобы вывод docker pull не попадал
+      # в шаг тестов и в логе была видна настоящая ошибка Unity
+      - name: Pre-pull Unity image
+        run: |
+          VERSION=$(grep 'm_EditorVersion:' ProjectSettings/ProjectVersion.txt | awk '{print $2}')
+          docker pull "unityci/editor:ubuntu-${VERSION}-linux-il2cpp-3"
+
       - name: Run tests
         uses: game-ci/unity-test-runner@v4
         id: tests
@@ -118,7 +125,7 @@ jobs:
         uses: game-ci/unity-builder@v4
         with:
           targetPlatform: StandaloneWindows64
-          buildName: TinyTumble
+          buildName: TableBrawl
 
       - name: Upload build
         uses: actions/upload-artifact@v4
