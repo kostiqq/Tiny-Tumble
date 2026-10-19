@@ -1,3 +1,26 @@
 {
-	"name": "UI"
+    "name": "TinyTumble.UI",
+    "rootNamespace": "TinyTumble.UI",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "TinyTumble.Gameplay",
+        "VContainer",
+        "UniTask",
+        "R3.Unity",
+        "Unity.Localization",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
+        "Unity.InputSystem",
+        "MessagePipe"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": ["R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }

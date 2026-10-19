@@ -1,0 +1,26 @@
+{
+    "name": "TinyTumble.Bootstrap",
+    "rootNamespace": "TinyTumble.Bootstrap",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "TinyTumble.Networking",
+        "TinyTumble.Gameplay",
+        "TinyTumble.AI",
+        "TinyTumble.UI",
+        "VContainer",
+        "Unity.Netcode.Runtime",
+        "UniTask",
+        "MessagePipe",
+        "MessagePipe.VContainer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

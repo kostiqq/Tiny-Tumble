@@ -1,3 +1,25 @@
 {
-	"name": "Infrastructure"
+    "name": "TinyTumble.Infrastructure",
+    "rootNamespace": "TinyTumble.Infrastructure",
+    "references": [
+        "TinyTumble.Core",
+        "VContainer",
+        "UniTask",
+        "UniTask.Addressables",
+        "Unity.Addressables",
+        "Unity.ResourceManager",
+        "Unity.InputSystem",
+        "Unity.Localization",
+        "MessagePipe",
+        "MessagePipe.VContainer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }

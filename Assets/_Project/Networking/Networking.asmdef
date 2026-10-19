@@ -1,3 +1,23 @@
 {
-	"name": "Networking"
+    "name": "TinyTumble.Networking",
+    "rootNamespace": "TinyTumble.Networking",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "Unity.Netcode.Runtime",
+        "Unity.Networking.Transport",
+        "VContainer",
+        "UniTask",
+        "R3.Unity",
+        "com.rlabrecque.steamworks.net"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": ["R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }

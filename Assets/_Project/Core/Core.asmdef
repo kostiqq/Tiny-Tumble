@@ -1,3 +1,17 @@
 {
-	"name": "Core"
+    "name": "TinyTumble.Core",
+    "rootNamespace": "TinyTumble.Core",
+    "references": [
+        "UniTask",
+        "R3.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": ["R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }

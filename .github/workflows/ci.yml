@@ -135,7 +135,7 @@ jobs:
         uses: game-ci/unity-builder@v4
         with:
           targetPlatform: StandaloneWindows64
-          buildName: TableBrawl
+          buildName: TinyTumble
 
       - name: Upload build
         uses: actions/upload-artifact@v4

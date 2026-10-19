@@ -1,0 +1,29 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: bbb281ee3bf0b054c82ac2347e9e782c, type: 3}
+  m_Name: Arenas
+  m_EditorClassIdentifier: Unity.Addressables.Editor::UnityEditor.AddressableAssets.Settings.AddressableAssetGroup
+  m_GroupName: Arenas
+  m_GUID: bb3a882365e629446ab2b14ffb9f2d9e
+  m_SerializeEntries:
+  - m_GUID: 090d42ed7d8f5d64899fc3d0b9df2569
+    m_Address: Arena_Test
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - arena
+    FlaggedDuringContentUpdateRestriction: 0
+  m_ReadOnly: 0
+  m_Settings: {fileID: 11400000, guid: 027e602a75db5184b957186eaa6d95b8, type: 2}
+  m_SchemaSet:
+    m_Schemas:
+    - {fileID: 11400000, guid: a7a4f5771393daa44920d90645c196c7, type: 2}
+    - {fileID: 11400000, guid: a82286ae55db41743b0038f23291ecc2, type: 2}

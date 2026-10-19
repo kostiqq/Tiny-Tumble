@@ -1,3 +1,25 @@
 {
-	"name": "Gameplay"
+    "name": "TinyTumble.Gameplay",
+    "rootNamespace": "TinyTumble.Gameplay",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "TinyTumble.Networking",
+        "Unity.Netcode.Runtime",
+        "VContainer",
+        "UniTask",
+        "R3.Unity",
+        "Unity.Cinemachine",
+        "Unity.Animation.Rigging",
+        "MessagePipe"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": ["R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }
