@@ -12,13 +12,15 @@
         "Unity.Netcode.Runtime",
         "UniTask",
         "MessagePipe",
-        "MessagePipe.VContainer"
+        "MessagePipe.VContainer",
+        "Unity.InputSystem",
+        "R3.Unity"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": true,
-    "precompiledReferences": [],
+    "precompiledReferences": ["R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
