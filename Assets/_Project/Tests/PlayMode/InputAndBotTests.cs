@@ -23,6 +23,9 @@ namespace TinyTumble.Tests
         private const float MinBotTravel = 0.5f;
         private const float LoadTimeoutSeconds = 20f;
 
+        [UnitySetUp]
+        public IEnumerator SetUp() => UniTask.ToCoroutine(PlayModeHelpers.ResetSessionAsync);
+
         [UnityTest]
         public IEnumerator DevicePlayerInput_KeepsTapBetweenSamples() => UniTask.ToCoroutine(async () =>
         {
@@ -74,6 +77,7 @@ namespace TinyTumble.Tests
             }
 
             Assert.IsNotNull(bot, "Bot was not spawned.");
+            Assert.IsTrue(bot.IsBot, "Bots are spawned after players.");
             Vector3 start = bot.transform.position;
             float travelled = 0f;
             Vector3 previous = start;

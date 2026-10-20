@@ -4,12 +4,14 @@
     "references": [
         "TinyTumble.Core",
         "TinyTumble.Infrastructure",
+        "TinyTumble.Networking",
         "TinyTumble.Gameplay",
         "TinyTumble.AI",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
         "UniTask",
-        "MessagePipe"
+        "MessagePipe",
+        "Unity.Netcode.Runtime"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],
