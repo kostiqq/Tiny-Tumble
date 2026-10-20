@@ -41,7 +41,7 @@
 Служебные сборки (не попадают в билд игры, кроме PlayMode-тестов в тестовом прогоне):
 
   Editor           → Core, Infrastructure, Networking, Gameplay, AI, UI
-  Tests.EditMode   → Core, Infrastructure, Gameplay, AI
+  Tests.EditMode   → Core, Infrastructure, Networking, Gameplay, AI
   Tests.PlayMode   → все runtime-сборки, включая Bootstrap
 
   На Editor и Tests не ссылается ни одна сборка.
@@ -103,7 +103,7 @@ View и Presenter.
 Корень композиции.
 
 - **Наши ссылки:** все runtime-сборки.
-- **Пакеты:** `VContainer`, `MessagePipe.VContainer`, `Unity.Netcode.Runtime` (для регистрации `NetworkManager`).
+- **Пакеты:** `VContainer`, `MessagePipe.VContainer`, `Unity.Netcode.Runtime` (для регистрации `NetworkManager`); `Unity.InputSystem` и `R3.Unity` — для сетевого автотеста (`Diagnostics/NetworkAutoTest`, только development-сборки).
 - **Что лежит:** `RootLifetimeScope`, `SceneLifetimeScope`'ы меню и лобби, `MatchLifetimeScope`, точка входа сцены `Boot`. Только регистрации, никакой игровой логики.
 
 ### Служебные
@@ -111,7 +111,7 @@ View и Presenter.
 | Сборка | Платформы | Ссылки |
 |---|---|---|
 | `TinyTumble.Editor` | только Editor | `Core`, `Infrastructure`, `Networking`, `Gameplay`, `AI`, `UI` + `UnityEditor` API. Валидатор арен, гизмо, инспекторы конфигов, тулзы. На `Bootstrap` не ссылается: тулзы не должны зависеть от того, как собраны скоупы. |
-| `TinyTumble.Tests.EditMode` | только Editor | `Core`, `Infrastructure`, `Gameplay`, `AI` + `UnityEngine.TestRunner`, `UnityEditor.TestRunner`, `nunit.framework.dll`. Логика правил, модификаторов, голосования, подсчёта очков. |
+| `TinyTumble.Tests.EditMode` | только Editor | `Core`, `Infrastructure`, `Networking`, `Gameplay`, `AI` + `Unity.Netcode.Runtime`, `UnityEngine.TestRunner`, `UnityEditor.TestRunner`, `nunit.framework.dll`. Логика правил, модификаторов, голосования, подсчёта очков; правила сессии (слоты, допуск, барьер загрузки, сетевой ввод). |
 | `TinyTumble.Tests.PlayMode` | все | всё, включая `Bootstrap` + `UnityEngine.TestRunner`, `nunit.framework.dll`. Smoke-тест матча с ботами. |
 
 ## Сводная таблица
@@ -126,7 +126,7 @@ View и Presenter.
 | **UI** | ✓ | ✓ | | ✓ | | | |
 | **Bootstrap** | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | |
 | *Editor* | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | |
-| *Tests.EditMode* | ✓ | ✓ | | ✓ | ✓ | | |
+| *Tests.EditMode* | ✓ | ✓ | ✓ | ✓ | ✓ | | |
 | *Tests.PlayMode* | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 Редакторный код, который нужен рядом с конкретной фичей (кастомный инспектор модуля опасности), можно класть в отдельную editor-only сборку этого слоя, например `TinyTumble.Gameplay.Editor` с платформой только Editor. Правило то же: она ссылается вниз и на свой слой, на неё не ссылается никто.

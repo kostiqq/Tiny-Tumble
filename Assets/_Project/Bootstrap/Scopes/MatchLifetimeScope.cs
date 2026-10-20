@@ -1,6 +1,7 @@
 using TinyTumble.AI.Bots;
 using TinyTumble.Gameplay.Characters;
 using TinyTumble.Gameplay.Match;
+using TinyTumble.Networking.Spawning;
 using VContainer;
 using VContainer.Unity;
 
@@ -15,8 +16,11 @@ namespace TinyTumble.Bootstrap.Scopes
         {
             builder.Register<MatchArena>(Lifetime.Scoped);
             builder.Register<MatchRoster>(Lifetime.Scoped);
+            builder.Register<MatchCharacters>(Lifetime.Scoped);
             builder.Register<WanderBotInputFactory>(Lifetime.Scoped).As<IBotInputFactory>();
 
+            // Персонажи, которых NGO создаёт на клиентах, получают зависимости этого скоупа.
+            builder.RegisterEntryPoint<NetworkResolverScope>(Lifetime.Scoped);
             builder.RegisterEntryPoint<MatchEntryPoint>(Lifetime.Scoped).AsSelf();
             builder.RegisterEntryPoint<MatchFlowController>(Lifetime.Scoped);
             builder.RegisterEntryPoint<MatchDebugCommands>(Lifetime.Scoped);

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine.SceneManagement;
@@ -13,6 +14,13 @@ namespace TinyTumble.Core.Assets
         UniTask<T> LoadAsync<T>(string key, CancellationToken cancellationToken) where T : UnityEngine.Object;
 
         void Release(string key);
+
+        /// <summary>
+        /// Загружает все ассеты с меткой. Каждый успешный вызов требует ровно одного <see cref="ReleaseAll"/> с той же меткой.
+        /// </summary>
+        UniTask<IReadOnlyList<T>> LoadAllAsync<T>(string label, CancellationToken cancellationToken) where T : UnityEngine.Object;
+
+        void ReleaseAll(string label);
 
         /// <summary>Текущее число ссылок на ключ (0, если не загружен). Для диагностики и тестов.</summary>
         int GetReferenceCount(string key);

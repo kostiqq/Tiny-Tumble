@@ -9,6 +9,7 @@ namespace TinyTumble.Bootstrap.Scopes
         protected override void Configure(IContainerBuilder builder)
         {
             builder.RegisterEntryPoint<LobbyJoinController>();
+            builder.RegisterEntryPoint<LobbySessionGuard>();
         }
     }
 }

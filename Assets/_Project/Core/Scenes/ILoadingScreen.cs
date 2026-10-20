@@ -12,5 +12,8 @@ namespace TinyTumble.Core.Scenes
 
         /// <summary>Показывает экран до вызова Dispose у результата. Повторный Dispose безопасен.</summary>
         IDisposable Hold();
+
+        /// <summary>То же, с поясняющим текстом вместо «Загрузка…». Виден текст самого свежего холда с сообщением.</summary>
+        IDisposable Hold(string message);
     }
 }

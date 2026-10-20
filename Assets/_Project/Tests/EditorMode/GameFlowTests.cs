@@ -64,6 +64,11 @@ namespace TinyTumble.Tests
                 _counter.Acquire();
                 return new Handle(this);
             }
+
+            public IDisposable Hold(string message)
+            {
+                return Hold();
+            }
         }
 
         private sealed class FakeLog : IGameLog
