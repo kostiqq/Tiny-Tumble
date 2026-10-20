@@ -55,6 +55,8 @@ MonoBehaviour:
   _characterConfig: {fileID: 11400000, guid: eff60117aacc0b34ca63f83854750044, type: 2}
   _combatConfig: {fileID: 11400000, guid: d7ed26a6b5892544e991791295f18acf, type: 2}
   _botConfig: {fileID: 11400000, guid: dfae8313a0725c440836e9a82559c895, type: 2}
+  _sessionConfig: {fileID: 11400000, guid: 415d15cfccc81ec448e0338bf0795e79, type: 2}
+  _networkManagerPrefab: {fileID: 3757340047975952779, guid: 587d6b29d92492341b5e8f10519c7857, type: 3}
   _loadingScreen: {fileID: 1983879983598615527}
   _debugConsoleView: {fileID: 7712290829148673414}
 --- !u!1 &1294874195787245073
@@ -346,6 +348,8 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: TinyTumble.UI::TinyTumble.UI.Loading.LoadingScreenView
   _canvasGroup: {fileID: 6152259310350631392}
+  _label: {fileID: 7629251734688148569}
+  _defaultText: "\u0417\u0430\u0433\u0440\u0443\u0437\u043A\u0430\u2026"
 --- !u!1 &6873403955956790134
 GameObject:
   m_ObjectHideFlags: 0

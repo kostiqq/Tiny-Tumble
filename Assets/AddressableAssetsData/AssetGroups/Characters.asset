@@ -20,6 +20,7 @@ MonoBehaviour:
     m_ReadOnly: 0
     m_SerializedLabels:
     - character
+    - network
     FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 027e602a75db5184b957186eaa6d95b8, type: 2}

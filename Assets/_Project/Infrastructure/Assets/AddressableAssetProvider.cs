@@ -27,6 +27,9 @@ namespace TinyTumble.Infrastructure.Assets
 
         private readonly IGameLog _log;
         private readonly Dictionary<string, AssetEntry> _assets = new Dictionary<string, AssetEntry>();
+
+        // Метки отдельно от адресов: адрес и метка могут совпасть по имени, а хэндлы у них разные.
+        private readonly Dictionary<string, AssetEntry> _labels = new Dictionary<string, AssetEntry>();
         private readonly Dictionary<int, AsyncOperationHandle<SceneInstance>> _scenes =
             new Dictionary<int, AsyncOperationHandle<SceneInstance>>();
         private int _nextSceneId = 1;
@@ -105,6 +108,68 @@ namespace TinyTumble.Infrastructure.Assets
             return key != null && _assets.TryGetValue(key, out AssetEntry entry) ? entry.References : 0;
         }
 
+        public async UniTask<IReadOnlyList<T>> LoadAllAsync<T>(string label, CancellationToken cancellationToken) where T : Object
+        {
+            ThrowIfDisposed();
+            if (string.IsNullOrEmpty(label))
+            {
+                throw new ArgumentException("Label is empty.", nameof(label));
+            }
+
+            if (!_labels.TryGetValue(label, out AssetEntry entry))
+            {
+                entry = new AssetEntry { Handle = Addressables.LoadAssetsAsync<T>(label, null) };
+                _labels.Add(label, entry);
+            }
+
+            entry.References++;
+
+            try
+            {
+                await entry.Handle.ToUniTask(cancellationToken: cancellationToken);
+            }
+            catch
+            {
+                ReleaseAll(label);
+                throw;
+            }
+
+            if (entry.Handle.Status != AsyncOperationStatus.Succeeded)
+            {
+                ReleaseAll(label);
+                throw new InvalidOperationException($"Failed to load assets with label '{label}'.", entry.Handle.OperationException);
+            }
+
+            if (!(entry.Handle.Result is IList<T> loaded))
+            {
+                ReleaseAll(label);
+                throw new InvalidCastException($"Assets with label '{label}' are not {typeof(T).Name}.");
+            }
+
+            return new List<T>(loaded);
+        }
+
+        public void ReleaseAll(string label)
+        {
+            if (label == null || !_labels.TryGetValue(label, out AssetEntry entry))
+            {
+                _log.Warning(LogTag, $"Release of unknown label '{label}'.");
+                return;
+            }
+
+            entry.References--;
+            if (entry.References > 0)
+            {
+                return;
+            }
+
+            _labels.Remove(label);
+            if (entry.Handle.IsValid())
+            {
+                Addressables.Release(entry.Handle);
+            }
+        }
+
         public async UniTask<ContentSceneHandle> LoadSceneAdditiveAsync(string key, CancellationToken cancellationToken)
         {
             ThrowIfDisposed();
@@ -170,7 +235,16 @@ namespace TinyTumble.Infrastructure.Assets
                 }
             }
 
+            foreach (KeyValuePair<string, AssetEntry> pair in _labels)
+            {
+                if (pair.Value.Handle.IsValid())
+                {
+                    Addressables.Release(pair.Value.Handle);
+                }
+            }
+
             _assets.Clear();
+            _labels.Clear();
             _scenes.Clear();
         }
 

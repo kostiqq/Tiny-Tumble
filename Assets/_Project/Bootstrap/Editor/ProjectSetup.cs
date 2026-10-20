@@ -1,15 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using TinyTumble.Bootstrap.Scopes;
 using TinyTumble.Core.Assets;
 using TinyTumble.Core.Configs;
 using TinyTumble.Core.Flow;
 using TinyTumble.Gameplay.Characters;
 using TinyTumble.Infrastructure.Debugging;
+using TinyTumble.Networking.Input;
+using TinyTumble.Networking.Lobby;
+using TinyTumble.UI;
 using TinyTumble.UI.Flow;
 using TinyTumble.UI.Loading;
 using TinyTumble.UI.Lobby;
+using TinyTumble.UI.Menu;
+using TinyTumble.UI.Session;
+using Unity.Netcode;
+using Unity.Netcode.Components;
+using Unity.Netcode.Transports.UTP;
 using UnityEditor;
 using UnityEditor.AddressableAssets;
 using UnityEditor.AddressableAssets.Settings;
@@ -27,10 +36,10 @@ using Object = UnityEngine.Object;
 namespace TinyTumble.Bootstrap.Editor
 {
     /// <summary>
-    /// Собирает каркас этапа 1: конфиги, корневой префаб, VContainerSettings, группы Addressables,
-    /// тестовую арену, заглушку персонажа, сцены и Build Settings. Идемпотентен: повторный запуск
-    /// пересоздаёт сгенерированные объекты и не трогает остальное.
-    /// Запуск: меню Tiny Tumble → Setup → Stage 1, или batchmode
+    /// Собирает каркас этапов 1–2: конфиги, корневой префаб, NetworkManager, VContainerSettings, группы Addressables,
+    /// тестовую арену, сетевые префабы (сессия, заглушка персонажа), сцены и Build Settings. Идемпотентен:
+    /// повторный запуск пересоздаёт сгенерированные объекты и не трогает остальное.
+    /// Запуск: меню Tiny Tumble → Setup → Generate Project Assets, или batchmode
     /// -executeMethod TinyTumble.Bootstrap.Editor.ProjectSetup.RunBatch
     /// </summary>
     public static class ProjectSetup
@@ -42,8 +51,11 @@ namespace TinyTumble.Bootstrap.Editor
         private const string MaterialsFolder = "Assets/Art/Materials";
         private const string ArenasFolder = "Assets/AddressableAssets/Arenas";
         private const string CharactersFolder = "Assets/AddressableAssets/Characters";
+        private const string NetworkFolder = "Assets/AddressableAssets/Network";
 
         private const string RootPrefabPath = PrefabsFolder + "/RootLifetimeScope.prefab";
+        private const string NetworkManagerPrefabPath = PrefabsFolder + "/NetworkManager.prefab";
+        private const string SessionPrefabPath = NetworkFolder + "/" + AddressKeys.SessionState + ".prefab";
         private const string LegacyBootstrapPrefabPath = PrefabsFolder + "/Bootstrap.prefab";
         private const string VContainerSettingsPath = SettingsFolder + "/VContainerSettings.asset";
         private const string ArenaScenePath = ArenasFolder + "/" + AddressKeys.TestArena + ".unity";
@@ -64,7 +76,7 @@ namespace TinyTumble.Bootstrap.Editor
         private static readonly Color s_tableColor = new Color(0.72f, 0.53f, 0.34f);
         private static readonly Color s_loadingBackground = new Color(0.08f, 0.07f, 0.10f, 1f);
 
-        [MenuItem("Tiny Tumble/Setup/Stage 1")]
+        [MenuItem("Tiny Tumble/Setup/Generate Project Assets")]
         public static void Run()
         {
             if (!Application.isBatchMode && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
@@ -81,18 +93,22 @@ namespace TinyTumble.Bootstrap.Editor
             EnsureFolder(MaterialsFolder);
             EnsureFolder(ArenasFolder);
             EnsureFolder(CharactersFolder);
+            EnsureFolder(NetworkFolder);
 
             var matchConfig = EnsureAsset<MatchConfig>(ConfigsFolder + "/MatchConfig.asset");
             var characterConfig = EnsureAsset<CharacterConfig>(ConfigsFolder + "/CharacterConfig.asset");
             var combatConfig = EnsureAsset<CombatConfig>(ConfigsFolder + "/CombatConfig.asset");
             var botConfig = EnsureAsset<BotConfig>(ConfigsFolder + "/BotConfig.asset");
+            var sessionConfig = EnsureAsset<SessionConfig>(ConfigsFolder + "/SessionConfig.asset");
 
             Material arenaMaterial = EnsureLitMaterial(ArenaMaterialPath, s_tableColor);
             Material characterMaterial = EnsureLitMaterial(CharacterMaterialPath, Color.white);
 
-            RootLifetimeScope rootPrefab = CreateRootPrefab(matchConfig, characterConfig, combatConfig, botConfig);
+            NetworkManager networkManagerPrefab = CreateNetworkManagerPrefab();
+            RootLifetimeScope rootPrefab = CreateRootPrefab(matchConfig, characterConfig, combatConfig, botConfig, sessionConfig, networkManagerPrefab);
             SetupVContainerSettings(rootPrefab);
 
+            CreateSessionPrefab();
             CreateCharacterPrefab(characterMaterial);
             CreateArenaScene(arenaMaterial);
             SetupAddressables();
@@ -117,7 +133,7 @@ namespace TinyTumble.Bootstrap.Editor
                 EditorSceneManager.OpenScene(startScene);
             }
 
-            Debug.Log("[Setup] Stage 1 setup complete.");
+            Debug.Log("[Setup] Project assets generated.");
         }
 
         /// <summary>Точка входа для batchmode: код выхода 0 — успех, 1 — ошибка.</summary>
@@ -187,11 +203,44 @@ namespace TinyTumble.Bootstrap.Editor
 
         // ---------- Корень ----------
 
+        private static NetworkManager CreateNetworkManagerPrefab()
+        {
+            var root = new GameObject("NetworkManager");
+            try
+            {
+                var transport = root.AddComponent<UnityTransport>();
+                var manager = root.AddComponent<NetworkManager>();
+
+                manager.NetworkConfig = new NetworkConfig
+                {
+                    NetworkTransport = transport,
+                    PlayerPrefab = null,
+                    ConnectionApproval = true,
+                    // Сцены грузим сами (арены — сцены Addressables), хост объявляет переходы через объект сессии.
+                    EnableSceneManagement = false,
+                    // Префабы регистрируются в рантайме из Addressables; NGO проверит, что у хоста и клиента они совпадают.
+                    ForceSamePrefabs = true,
+                };
+                manager.NetworkConfig.Prefabs.NetworkPrefabsLists.Clear();
+                manager.RunInBackground = true;
+
+                PrefabUtility.SaveAsPrefabAsset(root, NetworkManagerPrefabPath);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            return AssetDatabase.LoadAssetAtPath<NetworkManager>(NetworkManagerPrefabPath);
+        }
+
         private static RootLifetimeScope CreateRootPrefab(
             MatchConfig matchConfig,
             CharacterConfig characterConfig,
             CombatConfig combatConfig,
-            BotConfig botConfig)
+            BotConfig botConfig,
+            SessionConfig sessionConfig,
+            NetworkManager networkManagerPrefab)
         {
             var root = new GameObject("RootLifetimeScope");
             try
@@ -215,6 +264,8 @@ namespace TinyTumble.Bootstrap.Editor
                 serialized.FindProperty("_characterConfig").objectReferenceValue = characterConfig;
                 serialized.FindProperty("_combatConfig").objectReferenceValue = combatConfig;
                 serialized.FindProperty("_botConfig").objectReferenceValue = botConfig;
+                serialized.FindProperty("_sessionConfig").objectReferenceValue = sessionConfig;
+                serialized.FindProperty("_networkManagerPrefab").objectReferenceValue = networkManagerPrefab;
                 serialized.FindProperty("_loadingScreen").objectReferenceValue = loadingScreen;
                 serialized.FindProperty("_debugConsoleView").objectReferenceValue = console;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -250,6 +301,7 @@ namespace TinyTumble.Bootstrap.Editor
             var view = canvasObject.AddComponent<LoadingScreenView>();
             var serialized = new SerializedObject(view);
             serialized.FindProperty("_canvasGroup").objectReferenceValue = group;
+            serialized.FindProperty("_label").objectReferenceValue = label;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             return view;
         }
@@ -274,6 +326,23 @@ namespace TinyTumble.Bootstrap.Editor
 
         // ---------- Контент ----------
 
+        private static void CreateSessionPrefab()
+        {
+            var root = new GameObject(AddressKeys.SessionState);
+            try
+            {
+                root.AddComponent<NetworkObject>();
+                root.AddComponent<SessionNetworkState>();
+                PrefabUtility.SaveAsPrefabAsset(root, SessionPrefabPath);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            EnsureNetworkObjectHash(SessionPrefabPath);
+        }
+
         private static void CreateCharacterPrefab(Material material)
         {
             GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -289,10 +358,29 @@ namespace TinyTumble.Bootstrap.Editor
                 body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
                 body.constraints = RigidbodyConstraints.FreezeRotation;
 
+                cube.AddComponent<NetworkObject>();
+
+                // Позицию считает хост, клиенты интерполируют. Вращение заморожено, масштаб не меняется.
+                var networkTransform = cube.AddComponent<NetworkTransform>();
+                networkTransform.AuthorityMode = NetworkTransform.AuthorityModes.Server;
+                networkTransform.SyncRotAngleX = false;
+                networkTransform.SyncRotAngleY = false;
+                networkTransform.SyncRotAngleZ = false;
+                networkTransform.SyncScaleX = false;
+                networkTransform.SyncScaleY = false;
+                networkTransform.SyncScaleZ = false;
+                networkTransform.Interpolate = true;
+
+                // У не-авторитетной стороны делает тело кинематическим: физику считает только хост.
+                cube.AddComponent<NetworkRigidbody>();
+
+                var networkInput = cube.AddComponent<NetworkPlayerInput>();
+
                 var character = cube.AddComponent<StubCharacter>();
                 var serialized = new SerializedObject(character);
                 serialized.FindProperty("_rigidbody").objectReferenceValue = body;
                 serialized.FindProperty("_renderer").objectReferenceValue = renderer;
+                serialized.FindProperty("_networkInput").objectReferenceValue = networkInput;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
                 PrefabUtility.SaveAsPrefabAsset(cube, CharacterPrefabPath);
@@ -300,6 +388,36 @@ namespace TinyTumble.Bootstrap.Editor
             finally
             {
                 Object.DestroyImmediate(cube);
+            }
+
+            EnsureNetworkObjectHash(CharacterPrefabPath);
+        }
+
+        /// <summary>
+        /// GlobalObjectIdHash сетевого префаба NGO вычисляет в OnValidate по id ассета. У префаба, созданного
+        /// скриптом, OnValidate мог отработать до сохранения ассета — пересчитываем и проверяем явно.
+        /// </summary>
+        private static void EnsureNetworkObjectHash(string prefabPath)
+        {
+            AssetDatabase.ImportAsset(prefabPath, ImportAssetOptions.ForceUpdate);
+            var networkObject = AssetDatabase.LoadAssetAtPath<NetworkObject>(prefabPath);
+            if (networkObject == null)
+            {
+                throw new InvalidOperationException($"No NetworkObject on {prefabPath}.");
+            }
+
+            MethodInfo onValidate = typeof(NetworkObject).GetMethod("OnValidate", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (onValidate != null)
+            {
+                onValidate.Invoke(networkObject, null);
+            }
+
+            EditorUtility.SetDirty(networkObject);
+            AssetDatabase.SaveAssetIfDirty(networkObject);
+
+            if (networkObject.PrefabIdHash == 0)
+            {
+                throw new InvalidOperationException($"NetworkObject on {prefabPath} has no GlobalObjectIdHash.");
             }
         }
 
@@ -345,14 +463,16 @@ namespace TinyTumble.Bootstrap.Editor
 
             settings.AddLabel(AddressKeys.ArenaLabel);
             settings.AddLabel(AddressKeys.CharacterLabel);
+            settings.AddLabel(AddressKeys.NetworkLabel);
 
             AddEntry(settings, groups["Arenas"], ArenaScenePath, AddressKeys.TestArena, AddressKeys.ArenaLabel);
-            AddEntry(settings, groups["Characters"], CharacterPrefabPath, AddressKeys.StubCharacter, AddressKeys.CharacterLabel);
+            AddEntry(settings, groups["Characters"], CharacterPrefabPath, AddressKeys.StubCharacter, AddressKeys.CharacterLabel, AddressKeys.NetworkLabel);
+            AddEntry(settings, groups["Core"], SessionPrefabPath, AddressKeys.SessionState, AddressKeys.NetworkLabel);
 
             EditorUtility.SetDirty(settings);
         }
 
-        private static void AddEntry(AddressableAssetSettings settings, AddressableAssetGroup group, string path, string address, string label)
+        private static void AddEntry(AddressableAssetSettings settings, AddressableAssetGroup group, string path, string address, params string[] labels)
         {
             string guid = AssetDatabase.AssetPathToGUID(path);
             if (string.IsNullOrEmpty(guid))
@@ -362,7 +482,10 @@ namespace TinyTumble.Bootstrap.Editor
 
             AddressableAssetEntry entry = settings.CreateOrMoveEntry(guid, group, false, true);
             entry.address = address;
-            entry.SetLabel(label, true, true, true);
+            foreach (string label in labels)
+            {
+                entry.SetLabel(label, true, true, true);
+            }
         }
 
         // ---------- Сцены ----------
@@ -386,7 +509,27 @@ namespace TinyTumble.Bootstrap.Editor
             Scene scene = OpenOrCreateScene(SceneNames.MainMenu);
             GameObject ui = CreateUiRoot();
             CreateTitle(ui.transform, "Tiny Tumble");
-            CreateFlowButton(ui.transform, "Играть", GameState.Lobby);
+
+            Button host = CreateButton(ui.transform, ButtonNames.Host, "Играть");
+            SetRect((RectTransform)host.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), new Vector2(0f, 380f));
+
+            InputField address = CreateInputField(ui.transform, "Address", "127.0.0.1", "IP хоста");
+            SetRect((RectTransform)address.transform, new Vector2(0.5f, 0f), new Vector2(420f, 90f), new Vector2(-190f, 230f));
+
+            Button join = CreateButton(ui.transform, ButtonNames.Join, "Подключиться");
+            SetRect((RectTransform)join.transform, new Vector2(0.5f, 0f), new Vector2(340f, 90f), new Vector2(230f, 230f));
+
+            Text status = CreateText(ui.transform, "Status", string.Empty, 32, TextAnchor.MiddleCenter);
+            SetRect(status.rectTransform, new Vector2(0.5f, 0f), new Vector2(1400f, 80f), new Vector2(0f, 110f));
+
+            var menu = ui.AddComponent<MultiplayerMenuView>();
+            var serialized = new SerializedObject(menu);
+            serialized.FindProperty("_hostButton").objectReferenceValue = host;
+            serialized.FindProperty("_joinButton").objectReferenceValue = join;
+            serialized.FindProperty("_addressField").objectReferenceValue = address;
+            serialized.FindProperty("_statusLabel").objectReferenceValue = status;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
             CreateScope<MainMenuLifetimeScope>(ui);
             EditorSceneManager.SaveScene(scene);
         }
@@ -404,7 +547,24 @@ namespace TinyTumble.Bootstrap.Editor
             serialized.FindProperty("_label").objectReferenceValue = players;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
-            CreateFlowButton(ui.transform, "Начать матч", GameState.Match);
+            // «Начать матч» видит только хост, «Готов» — только клиент, поэтому они на одном месте.
+            Button start = CreateFlowButton(ui.transform, ButtonNames.StartMatch, "Начать матч", GameState.Match, new Vector2(-280f, 200f));
+            var gate = start.gameObject.AddComponent<LobbyStartGate>();
+            serialized = new SerializedObject(gate);
+            serialized.FindProperty("_button").objectReferenceValue = start;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            Button ready = CreateButton(ui.transform, ButtonNames.Ready, "Готов");
+            SetRect((RectTransform)ready.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), new Vector2(-280f, 200f));
+            var readyButton = ready.gameObject.AddComponent<LobbyReadyButton>();
+            serialized = new SerializedObject(readyButton);
+            serialized.FindProperty("_button").objectReferenceValue = ready;
+            serialized.FindProperty("_label").objectReferenceValue = ready.GetComponentInChildren<Text>();
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            CreateFlowButton(ui.transform, ButtonNames.Leave, "Выйти", GameState.MainMenu, new Vector2(280f, 200f));
+            AddRoleVisibility(ui, new[] { start.gameObject }, new[] { ready.gameObject });
+
             CreateScope<LobbyLifetimeScope>(ui);
             EditorSceneManager.SaveScene(scene);
         }
@@ -420,12 +580,13 @@ namespace TinyTumble.Bootstrap.Editor
             }
 
             GameObject ui = CreateUiRoot();
-            Button button = CreateButton(ui.transform, "Завершить матч");
+            Button button = CreateButton(ui.transform, ButtonNames.EndMatch, "Завершить матч");
             SetRect((RectTransform)button.transform, new Vector2(1f, 1f), new Vector2(360f, 90f), new Vector2(-200f, -65f));
             var endButton = button.gameObject.AddComponent<MatchEndButton>();
             var serialized = new SerializedObject(endButton);
             serialized.FindProperty("_button").objectReferenceValue = button;
             serialized.ApplyModifiedPropertiesWithoutUndo();
+            AddRoleVisibility(ui, new[] { button.gameObject }, new GameObject[0]);
 
             CreateScope<MatchLifetimeScope>(ui);
             EditorSceneManager.SaveScene(scene);
@@ -436,7 +597,9 @@ namespace TinyTumble.Bootstrap.Editor
             Scene scene = OpenOrCreateScene(SceneNames.Results);
             GameObject ui = CreateUiRoot();
             CreateTitle(ui.transform, "Итоги");
-            CreateFlowButton(ui.transform, "В лобби", GameState.Lobby);
+            Button toLobby = CreateFlowButton(ui.transform, ButtonNames.ToLobby, "В лобби", GameState.Lobby, new Vector2(-280f, 200f));
+            CreateFlowButton(ui.transform, ButtonNames.Leave, "В меню", GameState.MainMenu, new Vector2(280f, 200f));
+            AddRoleVisibility(ui, new[] { toLobby.gameObject }, new GameObject[0]);
             CreateScope<ResultsLifetimeScope>(ui);
             EditorSceneManager.SaveScene(scene);
         }
@@ -540,21 +703,73 @@ namespace TinyTumble.Bootstrap.Editor
             SetRect(text.rectTransform, new Vector2(0.5f, 1f), new Vector2(1400f, 160f), new Vector2(0f, -180f));
         }
 
-        private static void CreateFlowButton(Transform parent, string label, GameState target)
+        private static Button CreateFlowButton(Transform parent, string name, string label, GameState target, Vector2 position)
         {
-            Button button = CreateButton(parent, label);
-            SetRect((RectTransform)button.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), new Vector2(0f, 200f));
+            Button button = CreateButton(parent, name, label);
+            SetRect((RectTransform)button.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), position);
 
             var flowButton = button.gameObject.AddComponent<GameFlowButton>();
             var serialized = new SerializedObject(flowButton);
             serialized.FindProperty("_button").objectReferenceValue = button;
             serialized.FindProperty("_target").intValue = (int)target;
             serialized.ApplyModifiedPropertiesWithoutUndo();
+            return button;
         }
 
-        private static Button CreateButton(Transform parent, string label)
+        /// <summary>Кнопки хоста и клиента переключает всегда активный корень UI (см. SessionRoleVisibility).</summary>
+        private static void AddRoleVisibility(GameObject ui, GameObject[] hostOnly, GameObject[] clientOnly)
         {
-            var buttonObject = new GameObject("Button", typeof(RectTransform), typeof(Image), typeof(Button));
+            var visibility = ui.AddComponent<SessionRoleVisibility>();
+            var serialized = new SerializedObject(visibility);
+            SetObjectArray(serialized.FindProperty("_hostOnly"), hostOnly);
+            SetObjectArray(serialized.FindProperty("_clientOnly"), clientOnly);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static void SetObjectArray(SerializedProperty property, GameObject[] values)
+        {
+            property.arraySize = values.Length;
+            for (int i = 0; i < values.Length; i++)
+            {
+                property.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+            }
+        }
+
+        private static InputField CreateInputField(Transform parent, string name, string value, string placeholder)
+        {
+            var fieldObject = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(InputField));
+            fieldObject.transform.SetParent(parent, false);
+
+            var image = fieldObject.GetComponent<Image>();
+            image.sprite = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/InputFieldBackground.psd");
+            image.type = Image.Type.Sliced;
+
+            Text text = CreateText(fieldObject.transform, "Text", string.Empty, 40, TextAnchor.MiddleLeft);
+            text.color = new Color(0.15f, 0.15f, 0.15f);
+            text.supportRichText = false;
+            Stretch(text.rectTransform);
+            text.rectTransform.offsetMin = new Vector2(16f, 6f);
+            text.rectTransform.offsetMax = new Vector2(-16f, -6f);
+
+            Text hint = CreateText(fieldObject.transform, "Placeholder", placeholder, 40, TextAnchor.MiddleLeft);
+            hint.color = new Color(0.15f, 0.15f, 0.15f, 0.5f);
+            hint.fontStyle = FontStyle.Italic;
+            Stretch(hint.rectTransform);
+            hint.rectTransform.offsetMin = text.rectTransform.offsetMin;
+            hint.rectTransform.offsetMax = text.rectTransform.offsetMax;
+
+            var field = fieldObject.GetComponent<InputField>();
+            field.textComponent = text;
+            field.placeholder = hint;
+            field.lineType = InputField.LineType.SingleLine;
+            field.characterLimit = 64;
+            field.text = value;
+            return field;
+        }
+
+        private static Button CreateButton(Transform parent, string name, string label)
+        {
+            var buttonObject = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
             buttonObject.transform.SetParent(parent, false);
 
             var image = buttonObject.GetComponent<Image>();
