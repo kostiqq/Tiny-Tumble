@@ -1,0 +1,28 @@
+{
+    "name": "TinyTumble.Bootstrap",
+    "rootNamespace": "TinyTumble.Bootstrap",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "TinyTumble.Networking",
+        "TinyTumble.Gameplay",
+        "TinyTumble.AI",
+        "TinyTumble.UI",
+        "VContainer",
+        "Unity.Netcode.Runtime",
+        "UniTask",
+        "MessagePipe",
+        "MessagePipe.VContainer",
+        "Unity.InputSystem",
+        "R3.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": ["R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

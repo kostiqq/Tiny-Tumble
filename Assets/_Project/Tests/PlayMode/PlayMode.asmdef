@@ -1,0 +1,30 @@
+{
+    "name": "TinyTumble.Tests.PlayMode",
+    "rootNamespace": "TinyTumble.Tests",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "TinyTumble.Networking",
+        "TinyTumble.Gameplay",
+        "TinyTumble.AI",
+        "TinyTumble.UI",
+        "TinyTumble.Bootstrap",
+        "UnityEngine.TestRunner",
+        "UniTask",
+        "VContainer",
+        "MessagePipe",
+        "UnityEngine.UI",
+        "Unity.InputSystem",
+        "Unity.Netcode.Runtime",
+        "R3.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": ["nunit.framework.dll", "R3.dll", "Microsoft.Bcl.TimeProvider.dll", "System.ComponentModel.Annotations.dll", "System.Threading.Channels.dll"],
+    "autoReferenced": false,
+    "defineConstraints": ["UNITY_INCLUDE_TESTS"],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

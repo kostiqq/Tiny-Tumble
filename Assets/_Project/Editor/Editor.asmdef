@@ -1,3 +1,21 @@
 {
-	"name": "Editor"
+    "name": "TinyTumble.Editor",
+    "rootNamespace": "TinyTumble.Editor",
+    "references": [
+        "TinyTumble.Core",
+        "TinyTumble.Infrastructure",
+        "TinyTumble.Networking",
+        "TinyTumble.Gameplay",
+        "TinyTumble.AI",
+        "TinyTumble.UI"
+    ],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }
