@@ -1,4 +1,3 @@
-using System;
 using System.Collections;
 using System.Text.RegularExpressions;
 using Cysharp.Threading.Tasks;
@@ -6,25 +5,28 @@ using NUnit.Framework;
 using TinyTumble.Bootstrap.Scopes;
 using TinyTumble.Core.Debugging;
 using TinyTumble.Core.Flow;
-using TinyTumble.Core.Scenes;
+using TinyTumble.Core.Network;
+using TinyTumble.Gameplay.Characters;
 using TinyTumble.Gameplay.Match;
+using TinyTumble.UI;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
-using UnityEngine.UI;
 using VContainer;
-using VContainer.Unity;
+using static TinyTumble.Tests.PlayModeHelpers;
 using Object = UnityEngine.Object;
 
 namespace TinyTumble.Tests
 {
     /// <summary>
-    /// Критерий готовности этапа 1: цикл Boot → Меню → Лобби → Матч → Итоги → Лобби проходит без ошибок в консоли.
+    /// Полный цикл Boot → Меню → Лобби → Матч → Итоги → Лобби → Меню без ошибок в консоли.
+    /// Соло идёт через ту же сеть, что и онлайн: хост без подключений.
     /// Любой Debug.LogError или исключение роняет тест (поведение Unity Test Framework по умолчанию).
     /// </summary>
     public sealed class GameLoopSmokeTests
     {
-        private static readonly TimeSpan s_timeout = TimeSpan.FromSeconds(20);
+        [UnitySetUp]
+        public IEnumerator SetUp() => UniTask.ToCoroutine(ResetSessionAsync);
 
         [UnityTest]
         public IEnumerator FullLoop_ViaSceneButtons() => UniTask.ToCoroutine(async () =>
@@ -32,19 +34,33 @@ namespace TinyTumble.Tests
             await SceneManager.LoadSceneAsync(SceneNames.Boot);
 
             await WaitForState(GameState.MainMenu);
-            ClickOnlyButton();
+            var session = FindRoot().Resolve<INetworkSession>();
+            Assert.AreEqual(SessionRole.None, session.Role.CurrentValue);
+            Click(ButtonNames.Host);
 
             await WaitForState(GameState.Lobby);
-            ClickOnlyButton();
+            Assert.IsTrue(session.IsHost, "Play from the menu hosts a session.");
+            Assert.IsFalse(IsButtonVisible(ButtonNames.Ready), "The host has no Ready button.");
+            Click(ButtonNames.StartMatch);
 
             await WaitForState(GameState.Match);
-            await WaitForMatchReady();
-            ClickOnlyButton();
+            MatchEntryPoint match = await WaitForMatchReady();
+            foreach (StubCharacter character in match.Characters)
+            {
+                Assert.IsTrue(character.IsSpawned, "Characters are network objects spawned by the host.");
+            }
+
+            Click(ButtonNames.EndMatch);
 
             await WaitForState(GameState.Results);
-            ClickOnlyButton();
+            Click(ButtonNames.ToLobby);
 
             await WaitForState(GameState.Lobby);
+            Assert.IsTrue(session.IsHost, "The session survives the match.");
+            Click(ButtonNames.Leave);
+
+            await WaitForState(GameState.MainMenu);
+            Assert.AreEqual(SessionRole.None, session.Role.CurrentValue, "Leaving to the menu closes the session.");
         });
 
         [UnityTest]
@@ -53,8 +69,8 @@ namespace TinyTumble.Tests
             await SceneManager.LoadSceneAsync(SceneNames.Match);
             await WaitForMatchReady();
 
-            IObjectResolver root = FindRoot();
-            Assert.IsTrue(root.Resolve<IDebugConsole>().Execute(MatchDebugCommands.EndCommand));
+            Assert.IsTrue(FindRoot().Resolve<INetworkSession>().IsHost, "A match opened directly starts a solo host.");
+            Assert.IsTrue(FindRoot().Resolve<IDebugConsole>().Execute(MatchDebugCommands.EndCommand));
 
             await WaitForState(GameState.Results);
         });
@@ -87,82 +103,5 @@ namespace TinyTumble.Tests
             Assert.IsInstanceOf<RootLifetimeScope>(sceneScope.Parent);
             Assert.AreEqual(1, Object.FindObjectsByType<RootLifetimeScope>().Length);
         });
-
-        private static IObjectResolver FindRoot()
-        {
-            var root = Object.FindAnyObjectByType<RootLifetimeScope>();
-            Assert.IsNotNull(root, "RootLifetimeScope was not created. Check VContainerSettings in Preloaded Assets.");
-            return root.Container;
-        }
-
-        private static async UniTask WaitForState(GameState state)
-        {
-            float deadline = Time.realtimeSinceStartup + (float)s_timeout.TotalSeconds;
-            while (true)
-            {
-                var root = Object.FindAnyObjectByType<RootLifetimeScope>();
-                if (root != null && root.Container != null)
-                {
-                    var flow = root.Container.Resolve<IGameFlow>();
-                    var loading = root.Container.Resolve<ILoadingScreen>();
-                    if (flow.Current == state && !flow.IsTransitioning && !loading.IsVisible)
-                    {
-                        return;
-                    }
-                }
-
-                if (Time.realtimeSinceStartup > deadline)
-                {
-                    Assert.Fail($"Timed out waiting for {state}. Active scene: {SceneManager.GetActiveScene().name}");
-                }
-
-                await UniTask.Yield();
-            }
-        }
-
-        private static async UniTask WaitForMatchReady()
-        {
-            float deadline = Time.realtimeSinceStartup + (float)s_timeout.TotalSeconds;
-            while (true)
-            {
-                var scope = Object.FindAnyObjectByType<MatchLifetimeScope>();
-                if (scope != null && scope.Container != null && scope.Container.Resolve<MatchEntryPoint>().IsReady)
-                {
-                    var root = Object.FindAnyObjectByType<RootLifetimeScope>();
-                    if (!root.Container.Resolve<ILoadingScreen>().IsVisible)
-                    {
-                        MatchEntryPoint match = scope.Container.Resolve<MatchEntryPoint>();
-                        Assert.GreaterOrEqual(match.Characters.Count, 1, "No characters spawned.");
-                        return;
-                    }
-                }
-
-                if (Time.realtimeSinceStartup > deadline)
-                {
-                    Assert.Fail("Timed out waiting for the match to load.");
-                }
-
-                await UniTask.Yield();
-            }
-        }
-
-        private static void ClickOnlyButton()
-        {
-            Scene active = SceneManager.GetActiveScene();
-            Button found = null;
-            foreach (Button button in Object.FindObjectsByType<Button>())
-            {
-                if (button.gameObject.scene != active)
-                {
-                    continue;
-                }
-
-                Assert.IsNull(found, $"More than one button in scene {active.name}.");
-                found = button;
-            }
-
-            Assert.IsNotNull(found, $"No button in scene {active.name}.");
-            found.onClick.Invoke();
-        }
     }
 }

@@ -56,7 +56,7 @@ namespace TinyTumble.Tests
             },
             ["TinyTumble.Tests.EditMode"] = new[]
             {
-                "TinyTumble.Core", "TinyTumble.Infrastructure", "TinyTumble.Gameplay", "TinyTumble.AI",
+                "TinyTumble.Core", "TinyTumble.Infrastructure", "TinyTumble.Networking", "TinyTumble.Gameplay", "TinyTumble.AI",
             },
             ["TinyTumble.Tests.PlayMode"] = s_runtime,
         };
