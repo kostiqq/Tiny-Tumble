@@ -70,8 +70,8 @@ namespace TinyTumble.Tests
             await SceneManager.LoadSceneAsync(SceneNames.Match);
 
             MatchEntryPoint match = await WaitForMatch();
-            StubCharacter bot = null;
-            foreach (StubCharacter character in match.Characters)
+            PlayerCharacter bot = null;
+            foreach (PlayerCharacter character in match.Characters)
             {
                 bot = character;
             }

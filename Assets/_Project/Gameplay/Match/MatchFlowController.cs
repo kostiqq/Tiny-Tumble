@@ -11,7 +11,7 @@ using VContainer.Unity;
 namespace TinyTumble.Gameplay.Match
 {
     /// <summary>
-    /// Хост: по первому MatchEnded убирает персонажей, выгружает арену и переводит всех в Итоги.
+    /// Хост: по первому MatchEnded убирает персонажей и предметы, выгружает арену и переводит всех в Итоги.
     /// Клиент матч не завершает: в Итоги его переведёт хост. Повторные события игнорируются.
     /// </summary>
     public sealed class MatchFlowController : IStartable, IDisposable
@@ -21,6 +21,7 @@ namespace TinyTumble.Gameplay.Match
         private readonly ISubscriber<MatchEnded> _matchEnded;
         private readonly MatchArena _arena;
         private readonly MatchCharacters _characters;
+        private readonly MatchNetworkObjects _objects;
         private readonly IGameFlow _gameFlow;
         private readonly INetworkSession _session;
         private readonly ILoadingScreen _loadingScreen;
@@ -32,6 +33,7 @@ namespace TinyTumble.Gameplay.Match
             ISubscriber<MatchEnded> matchEnded,
             MatchArena arena,
             MatchCharacters characters,
+            MatchNetworkObjects objects,
             IGameFlow gameFlow,
             INetworkSession session,
             ILoadingScreen loadingScreen,
@@ -40,6 +42,7 @@ namespace TinyTumble.Gameplay.Match
             _matchEnded = matchEnded;
             _arena = arena;
             _characters = characters;
+            _objects = objects;
             _gameFlow = gameFlow;
             _session = session;
             _loadingScreen = loadingScreen;
@@ -84,6 +87,7 @@ namespace TinyTumble.Gameplay.Match
             using (_loadingScreen.Hold())
             {
                 _characters.DespawnAll();
+                _objects.DespawnAll();
                 await _arena.UnloadAsync();
                 await _gameFlow.GoToAsync(GameState.Results);
             }

@@ -7,61 +7,142 @@ namespace TinyTumble.Tests
 {
     public sealed class RemoteInputTests
     {
-        [Test]
-        public void Buffer_KeepsTapsUntilSampled_AndLatestStick()
+        private static PlayerInputFrame Frame(Vector2 move, PlayerButtons pressed = PlayerButtons.None, PlayerButtons held = PlayerButtons.None)
         {
-            var buffer = new RemoteInputBuffer();
-            buffer.Push(new PlayerInputFrame(new Vector2(1f, 0f), PlayerButtons.Jump, PlayerButtons.None, PlayerButtons.Jump));
-            buffer.Push(new PlayerInputFrame(new Vector2(0f, 1f), PlayerButtons.None, PlayerButtons.Jump, PlayerButtons.None));
-
-            PlayerInputFrame frame = buffer.Consume();
-
-            Assert.AreEqual(new Vector2(0f, 1f), frame.Move, "The stick comes from the latest packet.");
-            Assert.IsTrue(frame.WasPressed(PlayerButtons.Jump), "A tap between host ticks must not be lost.");
-            Assert.IsTrue(frame.WasReleased(PlayerButtons.Jump));
-            Assert.IsFalse(frame.IsHeld(PlayerButtons.Jump));
-
-            PlayerInputFrame next = buffer.Consume();
-            Assert.IsFalse(next.WasPressed(PlayerButtons.Jump), "Presses are consumed by the sample.");
-            Assert.AreEqual(new Vector2(0f, 1f), next.Move, "Without new packets the stick stays.");
+            return new PlayerInputFrame(move, pressed, PlayerButtons.None, held);
         }
 
-        [Test]
-        public void Buffer_Clear_ReleasesEverything()
+        private static InputBundle Bundle(params InputPacket[] oldestFirst)
         {
-            var buffer = new RemoteInputBuffer();
-            buffer.Push(new PlayerInputFrame(Vector2.right, PlayerButtons.Dash, PlayerButtons.None, PlayerButtons.Dash));
-            buffer.Clear();
+            var bundle = new InputBundle();
+            for (int i = 0; i < oldestFirst.Length; i++)
+            {
+                bundle.PushNewest(oldestFirst[i]);
+            }
 
-            PlayerInputFrame frame = buffer.Consume();
-            Assert.AreEqual(Vector2.zero, frame.Move);
-            Assert.AreEqual(PlayerButtons.None, frame.Held);
-            Assert.AreEqual(PlayerButtons.None, frame.Pressed);
+            return bundle;
         }
 
         [Test]
         public void Packet_RoundTrips_AndClampsStick()
         {
             var source = new PlayerInputFrame(new Vector2(3f, 4f), PlayerButtons.Push, PlayerButtons.Grab, PlayerButtons.Parry);
-            PlayerInputFrame frame = new InputPacket(source).ToFrame();
+            var packet = new InputPacket(7, source);
+            PlayerInputFrame frame = packet.ToFrame();
 
-            Assert.AreEqual(1f, frame.Move.magnitude, 0.0001f, "Stick from the network is untrusted.");
+            Assert.AreEqual(7u, packet.Sequence);
+            Assert.AreEqual(1f, frame.Move.magnitude, 0.01f, "Stick from the network is untrusted.");
             Assert.AreEqual(PlayerButtons.Push, frame.Pressed);
             Assert.AreEqual(PlayerButtons.Grab, frame.Released);
             Assert.AreEqual(PlayerButtons.Parry, frame.Held);
         }
 
         [Test]
-        public void Packet_SameState_IgnoresEvents()
+        public void Packet_QuantizesStick_SoPredictionMatchesHost()
         {
-            var idle = new InputPacket(new PlayerInputFrame(Vector2.up, PlayerButtons.None, PlayerButtons.None, PlayerButtons.None));
-            var tap = new InputPacket(new PlayerInputFrame(Vector2.up, PlayerButtons.Jump, PlayerButtons.Jump, PlayerButtons.None));
-            var moved = new InputPacket(new PlayerInputFrame(Vector2.down, PlayerButtons.None, PlayerButtons.None, PlayerButtons.None));
+            var packet = new InputPacket(1, Frame(new Vector2(0.333f, -0.5f)));
+            PlayerInputFrame once = packet.ToFrame();
+            PlayerInputFrame twice = new InputPacket(2, once).ToFrame();
 
-            Assert.IsFalse(idle.HasEvents);
-            Assert.IsTrue(tap.HasEvents);
-            Assert.IsTrue(idle.SameState(tap));
-            Assert.IsFalse(idle.SameState(moved));
+            Assert.AreEqual(0.333f, once.Move.x, 1f / 127f);
+            Assert.AreEqual(once.Move, twice.Move, "Quantization must be stable: the owner predicts with the value the host gets.");
+        }
+
+        [Test]
+        public void Bundle_KeepsLastThree_NewestFirst()
+        {
+            InputBundle bundle = Bundle(
+                new InputPacket(1, Frame(Vector2.zero)),
+                new InputPacket(2, Frame(Vector2.zero)),
+                new InputPacket(3, Frame(Vector2.zero)),
+                new InputPacket(4, Frame(Vector2.zero)));
+
+            Assert.AreEqual(InputBundle.Capacity, bundle.Count);
+            Assert.AreEqual(4u, bundle[0].Sequence);
+            Assert.AreEqual(2u, bundle[2].Sequence);
+        }
+
+        [Test]
+        public void Queue_ConsumesOneFramePerTick_InOrder_AndSkipsDuplicates()
+        {
+            var queue = new RemoteInputQueue(maxBuffered: 8);
+            var first = new InputPacket(1, Frame(Vector2.right, PlayerButtons.Jump));
+            var second = new InputPacket(2, Frame(Vector2.up));
+            queue.Receive(Bundle(first));
+            // Следующий пакет повторяет первый кадр: дубликат не должен попасть в очередь второй раз.
+            queue.Receive(Bundle(first, second));
+
+            Assert.AreEqual(2, queue.Count);
+            PlayerInputFrame a = queue.Consume();
+            Assert.IsTrue(a.WasPressed(PlayerButtons.Jump));
+            Assert.AreEqual(1u, queue.LastConsumed);
+
+            PlayerInputFrame b = queue.Consume();
+            Assert.AreEqual(Vector2.up, b.Move);
+            Assert.IsFalse(b.WasPressed(PlayerButtons.Jump));
+            Assert.AreEqual(2u, queue.LastConsumed);
+        }
+
+        [Test]
+        public void Queue_LostPacket_IsRecoveredFromRedundancy()
+        {
+            var queue = new RemoteInputQueue(maxBuffered: 8);
+            var jump = new InputPacket(1, Frame(Vector2.zero, PlayerButtons.Jump));
+            var idle2 = new InputPacket(2, Frame(Vector2.zero));
+            var idle3 = new InputPacket(3, Frame(Vector2.zero));
+
+            // Пакеты с кадрами 1 и 2 потерялись, дошёл только третий — в нём есть и первые два.
+            queue.Receive(Bundle(jump, idle2, idle3));
+
+            Assert.IsTrue(queue.Consume().WasPressed(PlayerButtons.Jump), "A press survives two lost packets.");
+        }
+
+        [Test]
+        public void Queue_Starved_RepeatsStateWithoutPresses()
+        {
+            var queue = new RemoteInputQueue(maxBuffered: 8);
+            queue.Receive(Bundle(new InputPacket(1, Frame(Vector2.left, PlayerButtons.Dash, PlayerButtons.Grab))));
+            queue.Consume();
+
+            PlayerInputFrame starved = queue.Consume();
+            Assert.AreEqual(Vector2.left, starved.Move, "While the next frame is late, the stick stays.");
+            Assert.IsTrue(starved.IsHeld(PlayerButtons.Grab));
+            Assert.IsFalse(starved.WasPressed(PlayerButtons.Dash), "A press must not repeat.");
+            Assert.AreEqual(1u, queue.LastConsumed);
+        }
+
+        [Test]
+        public void Queue_TooFarBehind_MergesFrames_KeepingPresses()
+        {
+            var queue = new RemoteInputQueue(maxBuffered: 2);
+            queue.Receive(Bundle(new InputPacket(1, Frame(Vector2.zero, PlayerButtons.Jump))));
+            queue.Receive(Bundle(new InputPacket(2, Frame(Vector2.zero))));
+            queue.Receive(Bundle(new InputPacket(3, Frame(Vector2.zero, PlayerButtons.Push))));
+            queue.Receive(Bundle(new InputPacket(4, Frame(Vector2.down))));
+
+            PlayerInputFrame merged = queue.Consume();
+
+            Assert.LessOrEqual(queue.Count, 1, "The host catches up instead of growing the input delay.");
+            Assert.IsTrue(merged.WasPressed(PlayerButtons.Jump));
+            Assert.IsTrue(merged.WasPressed(PlayerButtons.Push));
+        }
+
+        [Test]
+        public void Queue_Clear_ReleasesEverything()
+        {
+            var queue = new RemoteInputQueue(maxBuffered: 4);
+            queue.Receive(Bundle(new InputPacket(1, Frame(Vector2.right, PlayerButtons.Dash, PlayerButtons.Dash))));
+            queue.Consume();
+            queue.Clear();
+
+            PlayerInputFrame frame = queue.Consume();
+            Assert.AreEqual(Vector2.zero, frame.Move);
+            Assert.AreEqual(PlayerButtons.None, frame.Held);
+            Assert.AreEqual(0u, queue.LastConsumed);
+
+            // После сброса (новый владелец) нумерация начинается заново.
+            queue.Receive(Bundle(new InputPacket(1, Frame(Vector2.up))));
+            Assert.AreEqual(1, queue.Count);
         }
     }
 }
