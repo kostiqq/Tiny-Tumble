@@ -21,7 +21,7 @@ MonoBehaviour:
   _maxRoundDuration: 120
   _modifierVoteDuration: 5
   _arenaKey: Arena_Test
-  _characterKey: Character_Stub
+  _characterKey: Character_Capsule
   _spawnRadius: 3
   _spawnHeight: 1
   _eliminationHeight: -5

@@ -53,6 +53,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
         private readonly ILocalPlayers _localPlayers;
         private readonly IPublisher<MatchEnded> _matchEnded;
         private readonly NetworkSimulatorControl _simulator;
+        private readonly MatchSetup _matchSetup;
         private readonly IGameLog _log;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<ulong> _clientsBuffer = new List<ulong>();
@@ -68,6 +69,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
             ILocalPlayers localPlayers,
             IPublisher<MatchEnded> matchEnded,
             NetworkSimulatorControl simulator,
+            MatchSetup matchSetup,
             IGameLog log)
         {
             _options = options;
@@ -79,6 +81,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
             _localPlayers = localPlayers;
             _matchEnded = matchEnded;
             _simulator = simulator;
+            _matchSetup = matchSetup;
             _log = log;
         }
 
@@ -141,6 +144,14 @@ namespace TinyTumble.Bootstrap.Diagnostics
             {
                 _session.HostPort = _options.Port;
             }
+
+            if (_options.Bots >= 0)
+            {
+                _matchSetup.BotCount = _options.Bots;
+            }
+
+            // Бот дерётся всерьёз; выпавший по вине бота игрок не должен заканчивать матч посреди проверки сети.
+            _matchSetup.RespawnOnFall = true;
 
             if (!string.IsNullOrEmpty(_options.NetworkSimulator))
             {
@@ -512,7 +523,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
         /// <summary>Что известно о персонаже на старте: после конца матча сам объект уже уничтожен.</summary>
         private sealed class TrackedCharacter
         {
-            public StubCharacter Character;
+            public PlayerCharacter Character;
             public string Name;
             public bool IsBot;
             public bool IsOwn;
@@ -525,7 +536,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
             var result = new List<TrackedCharacter>();
             for (int i = 0; i < match.Characters.Count; i++)
             {
-                StubCharacter character = match.Characters[i];
+                PlayerCharacter character = match.Characters[i];
                 result.Add(new TrackedCharacter
                 {
                     Character = character,
@@ -650,7 +661,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
         {
             for (int i = 0; i < match.Characters.Count; i++)
             {
-                StubCharacter character = match.Characters[i];
+                PlayerCharacter character = match.Characters[i];
                 string name = character.IsBot ? "bot" : "P" + (character.Slot + 1);
                 Step($"  {name} owner {character.OwnerClientId} at {character.transform.position}");
             }

@@ -1,69 +1,86 @@
+using TinyTumble.Core.Configs;
 using TinyTumble.Core.Input;
 using Unity.Netcode;
+using VContainer;
 
 namespace TinyTumble.Networking.Input
 {
     /// <summary>
-    /// Ввод персонажа, которым управляет удалённый клиент. У клиента-владельца сэмплит его локальный
-    /// <see cref="IPlayerInput"/> и шлёт хосту; на хосте сам является <see cref="IPlayerInput"/> для симуляции.
-    /// Персонаж на хосте не отличает такой ввод от геймпада или бота.
-    /// Отправка надёжная: потерянное нажатие прыжка хуже лишних байт; предсказание и ненадёжный канал — этап 3.
+    /// Ввод персонажа, которым управляет удалённый клиент. Клиент-владелец каждый тик отдаёт сюда свой кадр
+    /// (<see cref="Submit"/>) и сам же по нему предсказывает движение; кадр уходит хосту по ненадёжному каналу
+    /// вместе с двумя предыдущими. На хосте компонент — обычный <see cref="IPlayerInput"/>: персонаж
+    /// не отличает такой ввод от геймпада или бота.
     /// </summary>
     public sealed class NetworkPlayerInput : NetworkBehaviour, IPlayerInput
     {
-        private IPlayerInput _localSource;
-        private RemoteInputBuffer _buffer;
-        private InputPacket _lastSent;
-        private bool _hasSent;
+        private const int DefaultMaxBuffered = 4;
 
-        /// <summary>Клиент-владелец: чей ввод отправлять.</summary>
-        public void SetLocalSource(IPlayerInput source)
+        private RemoteInputQueue _queue = new RemoteInputQueue(DefaultMaxBuffered);
+        private InputBundle _outgoing;
+        private uint _nextSequence;
+
+        /// <summary>Хост: номер последнего применённого кадра. Уходит владельцу в снимке состояния.</summary>
+        public uint LastConsumedSequence => _queue.LastConsumed;
+
+        /// <summary>Хост: сколько кадров ждёт применения (диагностика).</summary>
+        public int BufferedCount => _queue.Count;
+
+        [Inject]
+        public void Construct(SessionConfig config)
         {
-            _localSource = source;
+            _queue = new RemoteInputQueue(config.MaxBufferedInputs);
         }
 
         public PlayerInputFrame Sample()
         {
-            return _buffer.Consume();
+            return _queue.Consume();
+        }
+
+        /// <summary>
+        /// Клиент-владелец, ровно раз за тик: отправляет кадр хосту. Возвращает его номер и кадр в том виде,
+        /// в каком его применит хост, — по нему и нужно предсказывать.
+        /// </summary>
+        public uint Submit(in PlayerInputFrame frame, out PlayerInputFrame sent)
+        {
+            var packet = new InputPacket(++_nextSequence, frame);
+            sent = packet.ToFrame();
+            if (!IsSpawned || !IsOwner || IsServer)
+            {
+                return packet.Sequence;
+            }
+
+            _outgoing.PushNewest(packet);
+            SubmitInputRpc(_outgoing);
+            return packet.Sequence;
         }
 
         public override void OnNetworkDespawn()
         {
-            _localSource = null;
-            _buffer.Clear();
+            ResetStreams();
+        }
+
+        public override void OnGainedOwnership()
+        {
+            ResetStreams();
         }
 
         public override void OnLostOwnership()
         {
-            _localSource = null;
+            ResetStreams();
         }
 
-        private void FixedUpdate()
+        [Rpc(SendTo.Server, Delivery = RpcDelivery.Unreliable, InvokePermission = RpcInvokePermission.Owner)]
+        private void SubmitInputRpc(InputBundle bundle)
         {
-            // Хост симулирует сам и ввод себе не шлёт; чужие клиенты ничего не отправляют.
-            if (_localSource == null || !IsSpawned || !IsOwner || IsServer)
-            {
-                return;
-            }
-
-            // Ровно один сэмпл за тик, как и у персонажа на хосте.
-            var packet = new InputPacket(_localSource.Sample());
-
-            // Пока стик и кнопки не меняются, хосту хватает последнего пакета.
-            if (_hasSent && !packet.HasEvents && packet.SameState(_lastSent))
-            {
-                return;
-            }
-
-            _lastSent = packet;
-            _hasSent = true;
-            SubmitInputRpc(packet);
+            _queue.Receive(bundle);
         }
 
-        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Owner)]
-        private void SubmitInputRpc(InputPacket packet)
+        private void ResetStreams()
         {
-            _buffer.Push(packet.ToFrame());
+            // Клиент отвалился или персонаж сменил владельца: не держим кнопки и стик навечно.
+            _queue.Clear();
+            _outgoing = default;
+            _nextSequence = 0;
         }
     }
 }

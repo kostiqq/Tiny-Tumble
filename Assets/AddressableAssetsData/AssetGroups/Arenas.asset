@@ -21,6 +21,13 @@ MonoBehaviour:
     m_SerializedLabels:
     - arena
     FlaggedDuringContentUpdateRestriction: 0
+  - m_GUID: 5cf18c6bd58415547ac80fc11b5d11ba
+    m_Address: Item_Block
+    m_ReadOnly: 0
+    m_SerializedLabels:
+    - item
+    - network
+    FlaggedDuringContentUpdateRestriction: 0
   m_ReadOnly: 0
   m_Settings: {fileID: 11400000, guid: 027e602a75db5184b957186eaa6d95b8, type: 2}
   m_SchemaSet:
