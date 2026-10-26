@@ -19,16 +19,19 @@ namespace TinyTumble.Gameplay.Match
 {
     /// <summary>
     /// Старт матча: держит экран загрузки, пока грузится арена. Хост ждёт, пока арену загрузят все клиенты,
-    /// и расставляет игроков по слотам и ботов; клиент сообщает хосту, что готов принять персонажей.
+    /// расставляет игроков по слотам и ботов и раскладывает предметы для броска; клиент сообщает хосту,
+    /// что готов принять объекты матча.
     /// </summary>
     public sealed class MatchEntryPoint : IInitializable, IAsyncStartable, IDisposable
     {
         private const string LogTag = "Match";
 
         private readonly MatchConfig _config;
+        private readonly MatchSetup _setup;
         private readonly MatchArena _arena;
         private readonly MatchRoster _roster;
         private readonly MatchCharacters _characters;
+        private readonly MatchNetworkObjects _objects;
         private readonly IAssetProvider _assets;
         private readonly IObjectResolver _resolver;
         private readonly ILoadingScreen _loadingScreen;
@@ -40,13 +43,16 @@ namespace TinyTumble.Gameplay.Match
         private readonly NetworkObject.VisibilityDelegate _visibility;
         private IDisposable _loadingHold;
         private bool _characterLoaded;
+        private bool _itemLoaded;
         private bool _subscribedToLoads;
 
         public MatchEntryPoint(
             MatchConfig config,
+            MatchSetup setup,
             MatchArena arena,
             MatchRoster roster,
             MatchCharacters characters,
+            MatchNetworkObjects objects,
             IAssetProvider assets,
             IObjectResolver resolver,
             ILoadingScreen loadingScreen,
@@ -57,9 +63,11 @@ namespace TinyTumble.Gameplay.Match
             IGameLog log)
         {
             _config = config;
+            _setup = setup;
             _arena = arena;
             _roster = roster;
             _characters = characters;
+            _objects = objects;
             _assets = assets;
             _resolver = resolver;
             _loadingScreen = loadingScreen;
@@ -71,7 +79,7 @@ namespace TinyTumble.Gameplay.Match
             _visibility = _lobby.HasLoadedCurrentState;
         }
 
-        public IReadOnlyList<StubCharacter> Characters => _characters.All;
+        public IReadOnlyList<PlayerCharacter> Characters => _characters.All;
 
         public bool IsReady { get; private set; }
 
@@ -136,6 +144,12 @@ namespace TinyTumble.Gameplay.Match
                 _characterLoaded = false;
                 _assets.Release(_config.CharacterKey);
             }
+
+            if (_itemLoaded)
+            {
+                _itemLoaded = false;
+                _assets.Release(_config.ItemKey);
+            }
         }
 
         private async UniTask StartAsHostAsync(CancellationToken cancellation)
@@ -146,6 +160,13 @@ namespace TinyTumble.Gameplay.Match
             var prefab = await _assets.LoadAsync<GameObject>(_config.CharacterKey, cancellation);
             _characterLoaded = true;
 
+            GameObject itemPrefab = null;
+            if (_config.ItemCount > 0 && !string.IsNullOrEmpty(_config.ItemKey))
+            {
+                itemPrefab = await _assets.LoadAsync<GameObject>(_config.ItemKey, cancellation);
+                _itemLoaded = true;
+            }
+
             // Вернувшийся после обрыва игрок досматривает матч: показываем ему персонажей, когда он загрузит арену.
             _lobby.ClientLoadedCurrentState += OnClientLoaded;
             _subscribedToLoads = true;
@@ -153,7 +174,8 @@ namespace TinyTumble.Gameplay.Match
             await _lobby.WaitForClientsLoadedAsync(cancellation);
 
             SpawnParticipants(prefab);
-            _log.Info(LogTag, $"Match started: {_roster.ParticipantCount} participants.");
+            SpawnItems(itemPrefab);
+            _log.Info(LogTag, $"Match started: {_roster.ParticipantCount} participants, {_objects.Count - _roster.ParticipantCount} items.");
         }
 
         private void SpawnParticipants(GameObject prefab)
@@ -168,7 +190,7 @@ namespace TinyTumble.Gameplay.Match
                 }
             }
 
-            int total = connected + _config.BotCount;
+            int total = connected + _setup.BotCount;
             int spawnIndex = 0;
 
             for (int i = 0; i < slots.Count; i++)
@@ -180,23 +202,50 @@ namespace TinyTumble.Gameplay.Match
                     continue;
                 }
 
-                StubCharacter character = Instantiate(prefab, spawnIndex++, total);
+                PlayerCharacter character = InstantiateCharacter(prefab, spawnIndex++, total);
                 IPlayerInput input = ResolveInput(slot, character);
                 int id = _roster.Add(isBot: false);
                 character.ConfigureServer(id, slot.Index, slot.LocalIndex, input, _roster);
                 character.NetworkObject.SpawnWithOwnership(slot.ClientId);
+                _objects.Track(character.NetworkObject);
             }
 
-            for (int i = 0; i < _config.BotCount; i++)
+            for (int i = 0; i < _setup.BotCount; i++)
             {
-                StubCharacter character = Instantiate(prefab, spawnIndex++, total);
+                PlayerCharacter character = InstantiateCharacter(prefab, spawnIndex++, total);
                 int id = _roster.Add(isBot: true);
-                character.ConfigureServer(id, StubCharacter.BotSlot, 0, _botInputFactory.Create(character.transform), _roster);
+                character.ConfigureServer(id, PlayerCharacter.BotSlot, 0, _botInputFactory.Create(character), _roster);
                 character.NetworkObject.Spawn();
+                _objects.Track(character.NetworkObject);
             }
         }
 
-        private IPlayerInput ResolveInput(PlayerSlot slot, StubCharacter character)
+        private void SpawnItems(GameObject prefab)
+        {
+            if (prefab == null)
+            {
+                return;
+            }
+
+            // Между игроками: со смещением на пол-шага, чтобы предметы не падали им на головы.
+            float offset = Mathf.PI / Mathf.Max(1, _config.ItemCount);
+            for (int i = 0; i < _config.ItemCount; i++)
+            {
+                Vector3 position = SpawnLayout.OnRing(i, _config.ItemCount, _config.ItemSpawnRadius, _config.SpawnHeight, offset);
+                GameObject instance = _resolver.Instantiate(prefab, position, Quaternion.identity);
+                if (!instance.TryGetComponent(out NetworkObject networkObject))
+                {
+                    UnityEngine.Object.Destroy(instance);
+                    throw new InvalidOperationException($"Prefab '{_config.ItemKey}' has no {nameof(NetworkObject)}.");
+                }
+
+                networkObject.CheckObjectVisibility = _visibility;
+                networkObject.Spawn();
+                _objects.Track(networkObject);
+            }
+        }
+
+        private IPlayerInput ResolveInput(PlayerSlot slot, PlayerCharacter character)
         {
             if (slot.ClientId != NetworkManager.ServerClientId)
             {
@@ -217,19 +266,16 @@ namespace TinyTumble.Gameplay.Match
             return null;
         }
 
-        private StubCharacter Instantiate(GameObject prefab, int spawnIndex, int total)
+        private PlayerCharacter InstantiateCharacter(GameObject prefab, int spawnIndex, int total)
         {
-            float angle = total > 0 ? spawnIndex * Mathf.PI * 2f / total : 0f;
-            var position = new Vector3(Mathf.Sin(angle) * _config.SpawnRadius, _config.SpawnHeight, Mathf.Cos(angle) * _config.SpawnRadius);
-            // Лицом к центру стола.
-            Quaternion rotation = Quaternion.Euler(0f, angle * Mathf.Rad2Deg + 180f, 0f);
+            Vector3 position = SpawnLayout.OnRing(spawnIndex, total, _config.SpawnRadius, _config.SpawnHeight);
+            Quaternion rotation = SpawnLayout.FacingCenter(position);
 
             GameObject instance = _resolver.Instantiate(prefab, position, rotation);
-            var character = instance.GetComponent<StubCharacter>();
-            if (character == null)
+            if (!instance.TryGetComponent(out PlayerCharacter character))
             {
                 UnityEngine.Object.Destroy(instance);
-                throw new InvalidOperationException($"Prefab '{_config.CharacterKey}' has no {nameof(StubCharacter)}.");
+                throw new InvalidOperationException($"Prefab '{_config.CharacterKey}' has no {nameof(PlayerCharacter)}.");
             }
 
             // Объекты матча получают только клиенты, загрузившие арену: иначе NGO создал бы их в чужой сцене,
@@ -240,15 +286,7 @@ namespace TinyTumble.Gameplay.Match
 
         private void OnClientLoaded(ulong clientId)
         {
-            IReadOnlyList<StubCharacter> characters = _characters.All;
-            for (int i = 0; i < characters.Count; i++)
-            {
-                NetworkObject networkObject = characters[i].NetworkObject;
-                if (networkObject.IsSpawned && !networkObject.IsNetworkVisibleTo(clientId))
-                {
-                    networkObject.NetworkShow(clientId);
-                }
-            }
+            _objects.ShowTo(clientId);
         }
 
         private void ReleaseLoadingHold()

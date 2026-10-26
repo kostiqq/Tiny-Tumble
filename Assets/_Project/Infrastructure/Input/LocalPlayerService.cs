@@ -17,15 +17,17 @@ namespace TinyTumble.Infrastructure.Input
         private const string LogTag = "Players";
 
         private readonly MatchConfig _matchConfig;
+        private readonly InputConfig _inputConfig;
         private readonly IGameLog _log;
         private readonly List<LocalPlayer> _players = new List<LocalPlayer>();
         private readonly List<InputDevice> _joinedDevices = new List<InputDevice>();
         private readonly List<DevicePlayerInput> _inputs = new List<DevicePlayerInput>();
         private IDisposable _anyButtonSubscription;
 
-        public LocalPlayerService(MatchConfig matchConfig, IGameLog log)
+        public LocalPlayerService(MatchConfig matchConfig, InputConfig inputConfig, IGameLog log)
         {
             _matchConfig = matchConfig;
+            _inputConfig = inputConfig;
             _log = log;
         }
 
@@ -120,7 +122,7 @@ namespace TinyTumble.Infrastructure.Input
                 devices = new[] { device };
             }
 
-            var input = new DevicePlayerInput(devices);
+            var input = new DevicePlayerInput(devices, _inputConfig);
             var player = new LocalPlayer(_players.Count, device.displayName, input);
             _inputs.Add(input);
             _joinedDevices.Add(device);

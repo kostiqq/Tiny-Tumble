@@ -6,7 +6,9 @@ using TinyTumble.Bootstrap.Scopes;
 using TinyTumble.Core.Assets;
 using TinyTumble.Core.Configs;
 using TinyTumble.Core.Flow;
+using TinyTumble.Gameplay.Cameras;
 using TinyTumble.Gameplay.Characters;
+using TinyTumble.Gameplay.Combat;
 using TinyTumble.Infrastructure.Debugging;
 using TinyTumble.Networking.Input;
 using TinyTumble.Networking.Lobby;
@@ -14,8 +16,11 @@ using TinyTumble.UI;
 using TinyTumble.UI.Flow;
 using TinyTumble.UI.Loading;
 using TinyTumble.UI.Lobby;
+using TinyTumble.UI.Match;
 using TinyTumble.UI.Menu;
 using TinyTumble.UI.Session;
+using Unity.Cinemachine;
+using Unity.Cinemachine.TargetTracking;
 using Unity.Netcode;
 using Unity.Netcode.Components;
 using Unity.Netcode.Transports.UTP;
@@ -36,8 +41,9 @@ using Object = UnityEngine.Object;
 namespace TinyTumble.Bootstrap.Editor
 {
     /// <summary>
-    /// Собирает каркас этапов 1–2: конфиги, корневой префаб, NetworkManager, VContainerSettings, группы Addressables,
-    /// тестовую арену, сетевые префабы (сессия, заглушка персонажа), сцены и Build Settings. Идемпотентен:
+    /// Собирает каркас этапов 1–4: конфиги, корневой префаб, NetworkManager, VContainerSettings, группы Addressables,
+    /// тестовую арену с kill-зоной, сетевые префабы (сессия, персонаж-капсула, предмет для броска), частицы попадания,
+    /// камеру Cinemachine, сцены и Build Settings. Идемпотентен:
     /// повторный запуск пересоздаёт сгенерированные объекты и не трогает остальное.
     /// Запуск: меню Tiny Tumble → Setup → Generate Project Assets, или batchmode
     /// -executeMethod TinyTumble.Bootstrap.Editor.ProjectSetup.RunBatch
@@ -49,6 +55,9 @@ namespace TinyTumble.Bootstrap.Editor
         private const string PrefabsFolder = "Assets/Prefabs";
         private const string SettingsFolder = "Assets/Settings";
         private const string MaterialsFolder = "Assets/Art/Materials";
+        private const string PhysicsFolder = "Assets/Art/Physics";
+        private const string FxFolder = "Assets/Prefabs/FX";
+        private const string ItemsFolder = "Assets/AddressableAssets/Items";
         private const string ArenasFolder = "Assets/AddressableAssets/Arenas";
         private const string CharactersFolder = "Assets/AddressableAssets/Characters";
         private const string NetworkFolder = "Assets/AddressableAssets/Network";
@@ -59,12 +68,20 @@ namespace TinyTumble.Bootstrap.Editor
         private const string LegacyBootstrapPrefabPath = PrefabsFolder + "/Bootstrap.prefab";
         private const string VContainerSettingsPath = SettingsFolder + "/VContainerSettings.asset";
         private const string ArenaScenePath = ArenasFolder + "/" + AddressKeys.TestArena + ".unity";
-        private const string CharacterPrefabPath = CharactersFolder + "/" + AddressKeys.StubCharacter + ".prefab";
+        private const string CharacterPrefabPath = CharactersFolder + "/" + AddressKeys.Character + ".prefab";
+        private const string LegacyCharacterPrefabPath = CharactersFolder + "/Character_Stub.prefab";
+        private const string ItemPrefabPath = ItemsFolder + "/" + AddressKeys.ThrowableItem + ".prefab";
+        private const string HitBurstPrefabPath = FxFolder + "/FX_HitBurst.prefab";
         private const string ArenaMaterialPath = MaterialsFolder + "/M_ArenaStub.mat";
         private const string CharacterMaterialPath = MaterialsFolder + "/M_CharacterStub.mat";
+        private const string CharacterFaceMaterialPath = MaterialsFolder + "/M_CharacterFace.mat";
+        private const string ItemMaterialPath = MaterialsFolder + "/M_ItemStub.mat";
+        private const string CharacterPhysicsPath = PhysicsFolder + "/PM_Character.asset";
+        private const string UrpParticlesMaterialPath = "Packages/com.unity.render-pipelines.universal/Runtime/Materials/ParticlesUnlit.mat";
 
         private const string ScopeObjectName = "[Scope]";
         private const string UiObjectName = "[UI]";
+        private const string MatchObjectName = "[Match]";
 
         private static readonly string[] s_addressableGroups = { "Core", "Arenas", "Characters", "Cosmetics", "Bosses", "Audio" };
 
@@ -75,6 +92,9 @@ namespace TinyTumble.Bootstrap.Editor
 
         private static readonly Color s_tableColor = new Color(0.72f, 0.53f, 0.34f);
         private static readonly Color s_loadingBackground = new Color(0.08f, 0.07f, 0.10f, 1f);
+        private static readonly Color s_faceColor = new Color(0.12f, 0.12f, 0.14f);
+        private static readonly Color s_itemColor = new Color(0.55f, 0.80f, 0.95f);
+        private static readonly Vector3 s_cameraOffset = new Vector3(0f, 11f, -10f);
 
         [MenuItem("Tiny Tumble/Setup/Generate Project Assets")]
         public static void Run()
@@ -91,6 +111,9 @@ namespace TinyTumble.Bootstrap.Editor
             EnsureFolder(PrefabsFolder);
             EnsureFolder(SettingsFolder);
             EnsureFolder(MaterialsFolder);
+            EnsureFolder(PhysicsFolder);
+            EnsureFolder(FxFolder);
+            EnsureFolder(ItemsFolder);
             EnsureFolder(ArenasFolder);
             EnsureFolder(CharactersFolder);
             EnsureFolder(NetworkFolder);
@@ -100,23 +123,34 @@ namespace TinyTumble.Bootstrap.Editor
             var combatConfig = EnsureAsset<CombatConfig>(ConfigsFolder + "/CombatConfig.asset");
             var botConfig = EnsureAsset<BotConfig>(ConfigsFolder + "/BotConfig.asset");
             var sessionConfig = EnsureAsset<SessionConfig>(ConfigsFolder + "/SessionConfig.asset");
+            var inputConfig = EnsureAsset<InputConfig>(ConfigsFolder + "/InputConfig.asset");
 
             Material arenaMaterial = EnsureLitMaterial(ArenaMaterialPath, s_tableColor);
             Material characterMaterial = EnsureLitMaterial(CharacterMaterialPath, Color.white);
+            Material faceMaterial = EnsureLitMaterial(CharacterFaceMaterialPath, s_faceColor);
+            Material itemMaterial = EnsureLitMaterial(ItemMaterialPath, s_itemColor);
+            PhysicsMaterial characterPhysics = EnsureCharacterPhysics();
 
             NetworkManager networkManagerPrefab = CreateNetworkManagerPrefab();
-            RootLifetimeScope rootPrefab = CreateRootPrefab(matchConfig, characterConfig, combatConfig, botConfig, sessionConfig, networkManagerPrefab);
+            RootLifetimeScope rootPrefab = CreateRootPrefab(matchConfig, characterConfig, combatConfig, botConfig, sessionConfig, inputConfig, networkManagerPrefab);
             SetupVContainerSettings(rootPrefab);
 
             CreateSessionPrefab();
-            CreateCharacterPrefab(characterMaterial);
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(LegacyCharacterPrefabPath) != null)
+            {
+                AssetDatabase.DeleteAsset(LegacyCharacterPrefabPath);
+            }
+
+            CreateCharacterPrefab(characterMaterial, faceMaterial, characterPhysics, characterConfig);
+            CreateItemPrefab(itemMaterial);
+            ParticleSystem hitBurst = CreateHitBurstPrefab();
             CreateArenaScene(arenaMaterial);
             SetupAddressables();
 
             SetupBootScene();
             SetupMainMenuScene();
             SetupLobbyScene();
-            SetupMatchScene();
+            SetupMatchScene(hitBurst);
             SetupResultsScene();
             SetupBuildSettings();
 
@@ -201,6 +235,25 @@ namespace TinyTumble.Bootstrap.Editor
             return Shader.Find("Standard");
         }
 
+        private static PhysicsMaterial EnsureCharacterPhysics()
+        {
+            var material = AssetDatabase.LoadAssetAtPath<PhysicsMaterial>(CharacterPhysicsPath);
+            if (material == null)
+            {
+                material = new PhysicsMaterial("PM_Character");
+                AssetDatabase.CreateAsset(material, CharacterPhysicsPath);
+            }
+
+            // Трение гасит отлёт и катание в ragdoll; в обычном состоянии скоростью управляет мотор, а не трение.
+            material.dynamicFriction = 0.5f;
+            material.staticFriction = 0.5f;
+            material.bounciness = 0.15f;
+            material.frictionCombine = PhysicsMaterialCombine.Average;
+            material.bounceCombine = PhysicsMaterialCombine.Maximum;
+            EditorUtility.SetDirty(material);
+            return material;
+        }
+
         // ---------- Корень ----------
 
         private static NetworkManager CreateNetworkManagerPrefab()
@@ -240,6 +293,7 @@ namespace TinyTumble.Bootstrap.Editor
             CombatConfig combatConfig,
             BotConfig botConfig,
             SessionConfig sessionConfig,
+            InputConfig inputConfig,
             NetworkManager networkManagerPrefab)
         {
             var root = new GameObject("RootLifetimeScope");
@@ -265,6 +319,7 @@ namespace TinyTumble.Bootstrap.Editor
                 serialized.FindProperty("_combatConfig").objectReferenceValue = combatConfig;
                 serialized.FindProperty("_botConfig").objectReferenceValue = botConfig;
                 serialized.FindProperty("_sessionConfig").objectReferenceValue = sessionConfig;
+                serialized.FindProperty("_inputConfig").objectReferenceValue = inputConfig;
                 serialized.FindProperty("_networkManagerPrefab").objectReferenceValue = networkManagerPrefab;
                 serialized.FindProperty("_loadingScreen").objectReferenceValue = loadingScreen;
                 serialized.FindProperty("_debugConsoleView").objectReferenceValue = console;
@@ -343,54 +398,171 @@ namespace TinyTumble.Bootstrap.Editor
             EnsureNetworkObjectHash(SessionPrefabPath);
         }
 
-        private static void CreateCharacterPrefab(Material material)
+        private static void CreateCharacterPrefab(Material material, Material faceMaterial, PhysicsMaterial physics, CharacterConfig config)
         {
-            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            cube.name = AddressKeys.StubCharacter;
+            float height = config.CharacterHeight;
+            float radius = config.BodyRadius;
+            var root = new GameObject(AddressKeys.Character);
             try
             {
-                var renderer = cube.GetComponent<MeshRenderer>();
-                renderer.sharedMaterial = material;
+                // Pivot у ног (договорённость арт-пайплайна): капсула-коллайдер поднята на половину роста.
+                var collider = root.AddComponent<CapsuleCollider>();
+                collider.height = height;
+                collider.radius = radius;
+                collider.center = Vector3.up * (height * 0.5f);
+                collider.sharedMaterial = physics;
+
+                var body = root.AddComponent<Rigidbody>();
+                body.mass = config.Mass;
+                body.interpolation = RigidbodyInterpolation.Interpolate;
+                // Тело бывает кинематическим (у клиентов, при захвате): Speculative работает в обоих режимах.
+                body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+                body.constraints = RigidbodyConstraints.FreezeRotation;
+                body.angularDamping = 0.5f;
+
+                root.AddComponent<NetworkObject>();
+                // Движение синхронизирует CharacterNetSync (предсказание у владельца), а не NetworkTransform.
+                var networkInput = root.AddComponent<NetworkPlayerInput>();
+                var sync = root.AddComponent<CharacterNetSync>();
+
+                var visual = new GameObject("Visual");
+                visual.transform.SetParent(root.transform, false);
+                var presentation = visual.AddComponent<CharacterPresentation>();
+
+                GameObject bodyMesh = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                bodyMesh.name = "Body";
+                Object.DestroyImmediate(bodyMesh.GetComponent<Collider>());
+                bodyMesh.transform.SetParent(visual.transform, false);
+                // Примитив капсулы: высота 2, радиус 0.5.
+                bodyMesh.transform.localPosition = Vector3.up * (height * 0.5f);
+                bodyMesh.transform.localScale = new Vector3(radius * 2f, height * 0.5f, radius * 2f);
+                var bodyRenderer = bodyMesh.GetComponent<MeshRenderer>();
+                bodyRenderer.sharedMaterial = material;
+
+                // «Нос» показывает, куда смотрит персонаж: без него у капсулы нет лица.
+                GameObject nose = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                nose.name = "Nose";
+                Object.DestroyImmediate(nose.GetComponent<Collider>());
+                nose.transform.SetParent(visual.transform, false);
+                nose.transform.localPosition = new Vector3(0f, height * 0.68f, radius * 0.95f);
+                nose.transform.localScale = new Vector3(radius * 0.6f, radius * 0.35f, radius * 0.5f);
+                nose.GetComponent<MeshRenderer>().sharedMaterial = faceMaterial;
+
+                var serializedPresentation = new SerializedObject(presentation);
+                SetComponentArray(serializedPresentation.FindProperty("_renderers"), new Object[] { bodyRenderer });
+                serializedPresentation.ApplyModifiedPropertiesWithoutUndo();
+
+                var character = root.AddComponent<PlayerCharacter>();
+                var serialized = new SerializedObject(character);
+                serialized.FindProperty("_rigidbody").objectReferenceValue = body;
+                serialized.FindProperty("_collider").objectReferenceValue = collider;
+                serialized.FindProperty("_networkInput").objectReferenceValue = networkInput;
+                serialized.FindProperty("_sync").objectReferenceValue = sync;
+                serialized.FindProperty("_presentation").objectReferenceValue = presentation;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+
+                PrefabUtility.SaveAsPrefabAsset(root, CharacterPrefabPath);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            EnsureNetworkObjectHash(CharacterPrefabPath);
+        }
+
+        private static void CreateItemPrefab(Material material)
+        {
+            const float size = 0.4f;
+            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cube.name = AddressKeys.ThrowableItem;
+            try
+            {
+                cube.transform.localScale = Vector3.one * size;
+                cube.GetComponent<MeshRenderer>().sharedMaterial = material;
 
                 var body = cube.AddComponent<Rigidbody>();
-                body.mass = 1f;
+                body.mass = 0.5f;
                 body.interpolation = RigidbodyInterpolation.Interpolate;
-                body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-                body.constraints = RigidbodyConstraints.FreezeRotation;
+                body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
 
                 cube.AddComponent<NetworkObject>();
-
-                // Позицию считает хост, клиенты интерполируют. Вращение заморожено, масштаб не меняется.
                 var networkTransform = cube.AddComponent<NetworkTransform>();
                 networkTransform.AuthorityMode = NetworkTransform.AuthorityModes.Server;
-                networkTransform.SyncRotAngleX = false;
-                networkTransform.SyncRotAngleY = false;
-                networkTransform.SyncRotAngleZ = false;
                 networkTransform.SyncScaleX = false;
                 networkTransform.SyncScaleY = false;
                 networkTransform.SyncScaleZ = false;
                 networkTransform.Interpolate = true;
-
-                // У не-авторитетной стороны делает тело кинематическим: физику считает только хост.
+                // У не-авторитетной стороны делает тело кинематическим: предметы симулирует хост.
                 cube.AddComponent<NetworkRigidbody>();
 
-                var networkInput = cube.AddComponent<NetworkPlayerInput>();
-
-                var character = cube.AddComponent<StubCharacter>();
-                var serialized = new SerializedObject(character);
+                var item = cube.AddComponent<GrabbableItem>();
+                var serialized = new SerializedObject(item);
                 serialized.FindProperty("_rigidbody").objectReferenceValue = body;
-                serialized.FindProperty("_renderer").objectReferenceValue = renderer;
-                serialized.FindProperty("_networkInput").objectReferenceValue = networkInput;
+                serialized.FindProperty("_collider").objectReferenceValue = cube.GetComponent<BoxCollider>();
+                serialized.FindProperty("_networkTransform").objectReferenceValue = networkTransform;
+                serialized.FindProperty("_holdBottomOffset").floatValue = size * 0.5f;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
-                PrefabUtility.SaveAsPrefabAsset(cube, CharacterPrefabPath);
+                PrefabUtility.SaveAsPrefabAsset(cube, ItemPrefabPath);
             }
             finally
             {
                 Object.DestroyImmediate(cube);
             }
 
-            EnsureNetworkObjectHash(CharacterPrefabPath);
+            EnsureNetworkObjectHash(ItemPrefabPath);
+        }
+
+        private static ParticleSystem CreateHitBurstPrefab()
+        {
+            var root = new GameObject("FX_HitBurst");
+            try
+            {
+                var particles = root.AddComponent<ParticleSystem>();
+                particles.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+
+                ParticleSystem.MainModule main = particles.main;
+                main.playOnAwake = false;
+                main.loop = false;
+                main.duration = 0.5f;
+                main.startLifetime = new ParticleSystem.MinMaxCurve(0.25f, 0.45f);
+                main.startSpeed = new ParticleSystem.MinMaxCurve(2.5f, 6f);
+                main.startSize = new ParticleSystem.MinMaxCurve(0.06f, 0.16f);
+                main.startColor = new ParticleSystem.MinMaxGradient(new Color(1f, 0.95f, 0.7f), new Color(1f, 0.6f, 0.2f));
+                main.gravityModifier = 0.6f;
+                // Пул переставляет систему от удара к удару: частицы прошлого удара должны остаться на месте.
+                main.simulationSpace = ParticleSystemSimulationSpace.World;
+                main.maxParticles = 256;
+
+                ParticleSystem.EmissionModule emission = particles.emission;
+                emission.rateOverTime = 0f;
+
+                ParticleSystem.ShapeModule shape = particles.shape;
+                shape.shapeType = ParticleSystemShapeType.Sphere;
+                shape.radius = 0.1f;
+
+                ParticleSystem.SizeOverLifetimeModule size = particles.sizeOverLifetime;
+                size.enabled = true;
+                size.size = new ParticleSystem.MinMaxCurve(1f, AnimationCurve.Linear(0f, 1f, 1f, 0f));
+
+                var renderer = root.GetComponent<ParticleSystemRenderer>();
+                Material particleMaterial = AssetDatabase.LoadAssetAtPath<Material>(UrpParticlesMaterialPath);
+                if (particleMaterial == null)
+                {
+                    particleMaterial = AssetDatabase.GetBuiltinExtraResource<Material>("Default-ParticleSystem.mat");
+                }
+
+                renderer.sharedMaterial = particleMaterial;
+
+                PrefabUtility.SaveAsPrefabAsset(root, HitBurstPrefabPath);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            return AssetDatabase.LoadAssetAtPath<ParticleSystem>(HitBurstPrefabPath);
         }
 
         /// <summary>
@@ -432,6 +604,14 @@ namespace TinyTumble.Bootstrap.Editor
             table.GetComponent<MeshRenderer>().sharedMaterial = material;
             table.isStatic = true;
 
+            // Kill-зона под столом: всё, что упало, выбывает (персонажи) или возвращается (предметы).
+            var killZone = new GameObject("KillZone");
+            killZone.transform.position = new Vector3(0f, -3f, 0f);
+            var trigger = killZone.AddComponent<BoxCollider>();
+            trigger.isTrigger = true;
+            trigger.size = new Vector3(60f, 2f, 60f);
+            killZone.AddComponent<KillZone>();
+
             EditorSceneManager.SaveScene(scene, ArenaScenePath);
         }
 
@@ -463,10 +643,13 @@ namespace TinyTumble.Bootstrap.Editor
 
             settings.AddLabel(AddressKeys.ArenaLabel);
             settings.AddLabel(AddressKeys.CharacterLabel);
+            settings.AddLabel(AddressKeys.ItemLabel);
             settings.AddLabel(AddressKeys.NetworkLabel);
 
             AddEntry(settings, groups["Arenas"], ArenaScenePath, AddressKeys.TestArena, AddressKeys.ArenaLabel);
-            AddEntry(settings, groups["Characters"], CharacterPrefabPath, AddressKeys.StubCharacter, AddressKeys.CharacterLabel, AddressKeys.NetworkLabel);
+            AddEntry(settings, groups["Characters"], CharacterPrefabPath, AddressKeys.Character, AddressKeys.CharacterLabel, AddressKeys.NetworkLabel);
+            // Предметы — часть набора арены (свои по комнатам), поэтому в группе арен.
+            AddEntry(settings, groups["Arenas"], ItemPrefabPath, AddressKeys.ThrowableItem, AddressKeys.ItemLabel, AddressKeys.NetworkLabel);
             AddEntry(settings, groups["Core"], SessionPrefabPath, AddressKeys.SessionState, AddressKeys.NetworkLabel);
 
             EditorUtility.SetDirty(settings);
@@ -569,15 +752,21 @@ namespace TinyTumble.Bootstrap.Editor
             EditorSceneManager.SaveScene(scene);
         }
 
-        private static void SetupMatchScene()
+        private static void SetupMatchScene(ParticleSystem hitBurst)
         {
             Scene scene = OpenOrCreateScene(SceneNames.Match);
 
             Camera camera = FindMainCamera(scene);
             if (camera != null)
             {
-                camera.transform.SetPositionAndRotation(new Vector3(0f, 11f, -10f), Quaternion.Euler(48f, 0f, 0f));
+                camera.transform.SetPositionAndRotation(s_cameraOffset, Quaternion.Euler(48f, 0f, 0f));
+                if (camera.GetComponent<CinemachineBrain>() == null)
+                {
+                    camera.gameObject.AddComponent<CinemachineBrain>();
+                }
             }
+
+            GameObject match = CreateMatchRig(hitBurst);
 
             GameObject ui = CreateUiRoot();
             Button button = CreateButton(ui.transform, ButtonNames.EndMatch, "Завершить матч");
@@ -588,8 +777,74 @@ namespace TinyTumble.Bootstrap.Editor
             serialized.ApplyModifiedPropertiesWithoutUndo();
             AddRoleVisibility(ui, new[] { button.gameObject }, new GameObject[0]);
 
-            CreateScope<MatchLifetimeScope>(ui);
+            Text hud = CreateText(ui.transform, "Hud", string.Empty, 30, TextAnchor.UpperLeft);
+            SetRect(hud.rectTransform, new Vector2(0f, 1f), new Vector2(900f, 400f), new Vector2(480f, -230f));
+            var hudView = hud.gameObject.AddComponent<MatchHudView>();
+            serialized = new SerializedObject(hudView);
+            serialized.FindProperty("_label").objectReferenceValue = hud;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            CreateScope<MatchLifetimeScope>(ui, match);
             EditorSceneManager.SaveScene(scene);
+        }
+
+        /// <summary>
+        /// Общая камера (Target Group + кадрирование группы + приём тряски) и «сочность» попаданий.
+        /// </summary>
+        private static GameObject CreateMatchRig(ParticleSystem hitBurst)
+        {
+            var root = new GameObject(MatchObjectName);
+
+            var anchor = new GameObject("TableAnchor");
+            anchor.transform.SetParent(root.transform, false);
+
+            var groupObject = new GameObject("TargetGroup");
+            groupObject.transform.SetParent(root.transform, false);
+            var group = groupObject.AddComponent<CinemachineTargetGroup>();
+            // Центр стола в группе: камера не наезжает вплотную, даже если все игроки сбились в кучу.
+            group.Targets.Add(new CinemachineTargetGroup.Target { Object = anchor.transform, Weight = 0.6f, Radius = 4f });
+
+            var cameraObject = new GameObject("MatchCamera");
+            cameraObject.transform.SetParent(root.transform, false);
+            cameraObject.transform.SetPositionAndRotation(s_cameraOffset, Quaternion.Euler(48f, 0f, 0f));
+            var virtualCamera = cameraObject.AddComponent<CinemachineCamera>();
+            virtualCamera.Target.TrackingTarget = groupObject.transform;
+            LensSettings lens = virtualCamera.Lens;
+            lens.FieldOfView = 50f;
+            virtualCamera.Lens = lens;
+
+            var follow = cameraObject.AddComponent<CinemachineFollow>();
+            follow.FollowOffset = s_cameraOffset;
+            TrackerSettings tracker = follow.TrackerSettings;
+            tracker.BindingMode = BindingMode.WorldSpace;
+            follow.TrackerSettings = tracker;
+            cameraObject.AddComponent<CinemachineRotationComposer>();
+
+            var framing = cameraObject.AddComponent<CinemachineGroupFraming>();
+            framing.FramingSize = 0.7f;
+            framing.SizeAdjustment = CinemachineGroupFraming.SizeAdjustmentModes.DollyOnly;
+            framing.DollyRange = new Vector2(-6f, 4f);
+            framing.Damping = 1.5f;
+            cameraObject.AddComponent<CinemachineImpulseListener>();
+
+            var matchCamera = root.AddComponent<MatchCamera>();
+            var serialized = new SerializedObject(matchCamera);
+            serialized.FindProperty("_group").objectReferenceValue = group;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            var feedbackObject = new GameObject("CombatFeedback");
+            feedbackObject.transform.SetParent(root.transform, false);
+            var impulse = feedbackObject.AddComponent<CinemachineImpulseSource>();
+            impulse.ImpulseDefinition.ImpulseShape = CinemachineImpulseDefinition.ImpulseShapes.Bump;
+            impulse.ImpulseDefinition.ImpulseDuration = 0.18f;
+            impulse.DefaultVelocity = new Vector3(0.35f, -1f, 0f);
+            var feedback = feedbackObject.AddComponent<CombatFeedback>();
+            serialized = new SerializedObject(feedback);
+            serialized.FindProperty("_hitBurstPrefab").objectReferenceValue = hitBurst;
+            serialized.FindProperty("_impulse").objectReferenceValue = impulse;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            return root;
         }
 
         private static void SetupResultsScene()
@@ -632,7 +887,7 @@ namespace TinyTumble.Bootstrap.Editor
             // Сгенерированное пересоздаём; объекты, расставленные руками, не трогаем.
             foreach (GameObject root in scene.GetRootGameObjects())
             {
-                if (root.name == ScopeObjectName || root.name == UiObjectName)
+                if (root.name == ScopeObjectName || root.name == UiObjectName || root.name == MatchObjectName)
                 {
                     Object.DestroyImmediate(root);
                 }
@@ -660,19 +915,23 @@ namespace TinyTumble.Bootstrap.Editor
             return null;
         }
 
-        private static void CreateScope<T>(GameObject autoInjectTarget) where T : LifetimeScope
+        private static void CreateScope<T>(params GameObject[] autoInjectTargets) where T : LifetimeScope
         {
             var scopeObject = new GameObject(ScopeObjectName);
             var scope = scopeObject.AddComponent<T>();
-            if (autoInjectTarget == null)
+            if (autoInjectTargets == null || autoInjectTargets.Length == 0 || autoInjectTargets[0] == null)
             {
                 return;
             }
 
             var serialized = new SerializedObject(scope);
             SerializedProperty list = serialized.FindProperty("autoInjectGameObjects");
-            list.arraySize = 1;
-            list.GetArrayElementAtIndex(0).objectReferenceValue = autoInjectTarget;
+            list.arraySize = autoInjectTargets.Length;
+            for (int i = 0; i < autoInjectTargets.Length; i++)
+            {
+                list.GetArrayElementAtIndex(i).objectReferenceValue = autoInjectTargets[i];
+            }
+
             serialized.ApplyModifiedPropertiesWithoutUndo();
         }
 
@@ -724,6 +983,15 @@ namespace TinyTumble.Bootstrap.Editor
             SetObjectArray(serialized.FindProperty("_hostOnly"), hostOnly);
             SetObjectArray(serialized.FindProperty("_clientOnly"), clientOnly);
             serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        private static void SetComponentArray(SerializedProperty property, Object[] values)
+        {
+            property.arraySize = values.Length;
+            for (int i = 0; i < values.Length; i++)
+            {
+                property.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
+            }
         }
 
         private static void SetObjectArray(SerializedProperty property, GameObject[] values)

@@ -110,6 +110,7 @@ MonoBehaviour:
     - arena
     - character
     - network
+    - item
   m_SchemaTemplates: []
   m_GroupTemplateObjects:
   - {fileID: 11400000, guid: dae516647f2a6c042a452f39dd909dd0, type: 2}
