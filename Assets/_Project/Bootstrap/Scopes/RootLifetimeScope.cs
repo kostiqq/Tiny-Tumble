@@ -10,6 +10,7 @@ using TinyTumble.Core.Logging;
 using TinyTumble.Core.Messages;
 using TinyTumble.Core.Network;
 using TinyTumble.Core.Save;
+using TinyTumble.Gameplay.Match;
 using TinyTumble.Core.Scenes;
 using TinyTumble.Infrastructure.Assets;
 using TinyTumble.Infrastructure.Debugging;
@@ -45,6 +46,7 @@ namespace TinyTumble.Bootstrap.Scopes
         [SerializeField] private CombatConfig _combatConfig;
         [SerializeField] private BotConfig _botConfig;
         [SerializeField] private SessionConfig _sessionConfig;
+        [SerializeField] private InputConfig _inputConfig;
 
         [Header("Сеть")]
         [Tooltip("Префаб с NetworkManager и UnityTransport. Создаётся отдельным корневым объектом: NGO не разрешает его вкладывать.")]
@@ -61,10 +63,12 @@ namespace TinyTumble.Bootstrap.Scopes
             builder.RegisterInstance(_combatConfig);
             builder.RegisterInstance(_botConfig);
             builder.RegisterInstance(_sessionConfig);
+            builder.RegisterInstance(_inputConfig);
 
             MessagePipeOptions options = builder.RegisterMessagePipe();
             builder.RegisterMessageBroker<PlayerEliminated>(options);
             builder.RegisterMessageBroker<MatchEnded>(options);
+            builder.RegisterMessageBroker<CharacterHit>(options);
 
             builder.Register<UnityGameLog>(Lifetime.Singleton).As<IGameLog>();
             builder.Register<JsonSaveService>(Lifetime.Singleton).As<ISaveService>()
@@ -78,6 +82,8 @@ namespace TinyTumble.Bootstrap.Scopes
             builder.Register<GameFlow>(Lifetime.Singleton).AsSelf();
 
             builder.Register<LocalPlayerService>(Lifetime.Singleton).As<ILocalPlayers>();
+            // Выбор в лобби переживает матч, поэтому в корне.
+            builder.Register<MatchSetup>(Lifetime.Singleton);
 
             RegisterNetworking(builder);
 

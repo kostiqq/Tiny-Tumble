@@ -15,7 +15,8 @@
         "Unity.Addressables.Editor",
         "Unity.ResourceManager",
         "Unity.InputSystem",
-        "UnityEngine.UI"
+        "UnityEngine.UI",
+        "Unity.Cinemachine"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],

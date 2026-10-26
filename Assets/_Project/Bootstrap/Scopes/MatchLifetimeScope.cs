@@ -16,8 +16,9 @@ namespace TinyTumble.Bootstrap.Scopes
         {
             builder.Register<MatchArena>(Lifetime.Scoped);
             builder.Register<MatchRoster>(Lifetime.Scoped);
-            builder.Register<MatchCharacters>(Lifetime.Scoped);
-            builder.Register<WanderBotInputFactory>(Lifetime.Scoped).As<IBotInputFactory>();
+            builder.Register<MatchCharacters>(Lifetime.Scoped).AsSelf().As<IMatchCharactersView>().As<ICombatantRegistry>();
+            builder.Register<MatchNetworkObjects>(Lifetime.Scoped);
+            builder.Register<BrawlerBotInputFactory>(Lifetime.Scoped).As<IBotInputFactory>();
 
             // Персонажи, которых NGO создаёт на клиентах, получают зависимости этого скоупа.
             builder.RegisterEntryPoint<NetworkResolverScope>(Lifetime.Scoped);

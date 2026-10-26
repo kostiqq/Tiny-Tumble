@@ -45,7 +45,7 @@ namespace TinyTumble.Tests
 
             await WaitForState(GameState.Match);
             MatchEntryPoint match = await WaitForMatchReady();
-            foreach (StubCharacter character in match.Characters)
+            foreach (PlayerCharacter character in match.Characters)
             {
                 Assert.IsTrue(character.IsSpawned, "Characters are network objects spawned by the host.");
             }

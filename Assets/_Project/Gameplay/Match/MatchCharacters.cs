@@ -1,5 +1,7 @@
+using System;
 using System.Collections.Generic;
 using TinyTumble.Gameplay.Characters;
+using UnityEngine;
 
 namespace TinyTumble.Gameplay.Match
 {
@@ -7,24 +9,66 @@ namespace TinyTumble.Gameplay.Match
     /// Персонажи матча на этой машине. У хоста их создаёт матч, у клиентов — NGO, поэтому персонажи
     /// регистрируются сами при спавне.
     /// </summary>
-    public sealed class MatchCharacters
+    public sealed class MatchCharacters : IMatchCharactersView, ICombatantRegistry
     {
-        private readonly List<StubCharacter> _characters = new List<StubCharacter>();
-        private readonly List<StubCharacter> _buffer = new List<StubCharacter>();
+        private readonly List<PlayerCharacter> _characters = new List<PlayerCharacter>();
+        private readonly List<PlayerCharacter> _buffer = new List<PlayerCharacter>();
+        private readonly List<ICombatant> _combatants = new List<ICombatant>();
 
-        public IReadOnlyList<StubCharacter> All => _characters;
+        public IReadOnlyList<PlayerCharacter> All => _characters;
 
-        public void Add(StubCharacter character)
+        public IReadOnlyList<ICombatant> Combatants => _combatants;
+
+        /// <summary>Персонаж заспавнен на этой машине (камера, HUD).</summary>
+        public event Action<PlayerCharacter> Added;
+
+        /// <summary>Персонаж убран: выбыл, отключился или матч кончился.</summary>
+        public event Action<PlayerCharacter> Removed;
+
+        public event Action<ICharacterInfo> CharacterAdded;
+
+        public event Action<ICharacterInfo> CharacterRemoved;
+
+        public int Count => _characters.Count;
+
+        public ICharacterInfo this[int index] => _characters[index];
+
+        public void Add(PlayerCharacter character)
         {
-            if (!_characters.Contains(character))
+            if (_characters.Contains(character))
             {
-                _characters.Add(character);
+                return;
+            }
+
+            _characters.Add(character);
+            _combatants.Add(character);
+            Raise(Added, character);
+            Raise<ICharacterInfo>(CharacterAdded, character);
+        }
+
+        public void Remove(PlayerCharacter character)
+        {
+            if (_characters.Remove(character))
+            {
+                _combatants.Remove(character);
+                Raise(Removed, character);
+                Raise<ICharacterInfo>(CharacterRemoved, character);
             }
         }
 
-        public void Remove(StubCharacter character)
+        public bool TryGet(ulong networkObjectId, out PlayerCharacter character)
         {
-            _characters.Remove(character);
+            for (int i = 0; i < _characters.Count; i++)
+            {
+                if (_characters[i] != null && _characters[i].NetworkObjectId == networkObjectId)
+                {
+                    character = _characters[i];
+                    return true;
+                }
+            }
+
+            character = null;
+            return false;
         }
 
         /// <summary>
@@ -37,7 +81,7 @@ namespace TinyTumble.Gameplay.Match
             _buffer.AddRange(_characters);
             for (int i = 0; i < _buffer.Count; i++)
             {
-                StubCharacter character = _buffer[i];
+                PlayerCharacter character = _buffer[i];
                 if (character != null && character.IsSpawned && character.IsServer)
                 {
                     character.MarkRemovedByMatch();
@@ -46,6 +90,27 @@ namespace TinyTumble.Gameplay.Match
             }
 
             _buffer.Clear();
+        }
+
+        // Вызывается из колбэков спавна NGO: исключение подписчика не должно сорвать спавн.
+        private static void Raise<T>(Action<T> handlers, T character)
+        {
+            if (handlers == null)
+            {
+                return;
+            }
+
+            foreach (Delegate handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((Action<T>)handler).Invoke(character);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
+            }
         }
     }
 }

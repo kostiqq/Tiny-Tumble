@@ -1,4 +1,5 @@
 using System;
+using TinyTumble.Core.Configs;
 using TinyTumble.Core.Input;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -15,10 +16,13 @@ namespace TinyTumble.Infrastructure.Input
         private readonly InputAction _move;
         private readonly InputAction[] _buttonActions;
         private readonly PlayerButtons[] _buttonFlags;
+        private readonly InputConfig _config;
         private InputAccumulator _accumulator;
 
-        public DevicePlayerInput(InputDevice[] devices)
+        /// <param name="config">Чувствительность стика; null — сырое значение (тесты).</param>
+        public DevicePlayerInput(InputDevice[] devices, InputConfig config = null)
         {
+            _config = config;
             _map = PlayerControls.CreateMap();
             _map.devices = new ReadOnlyArray<InputDevice>(devices);
             _move = _map.FindAction(PlayerControls.MoveAction, throwIfNotFound: true);
@@ -48,7 +52,13 @@ namespace TinyTumble.Infrastructure.Input
                 }
             }
 
-            return _accumulator.Consume(_move.ReadValue<Vector2>(), held);
+            Vector2 move = _move.ReadValue<Vector2>();
+            if (_config != null)
+            {
+                move = StickResponse.Apply(move, _config.StickDeadZone, _config.StickOuterZone, _config.StickResponseExponent);
+            }
+
+            return _accumulator.Consume(move, held);
         }
 
         public void Dispose()

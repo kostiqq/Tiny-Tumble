@@ -23,13 +23,23 @@ namespace TinyTumble.Core.Configs
 
         [Header("Арена")]
         [SerializeField] private string _arenaKey = AddressKeys.TestArena;
-        [SerializeField] private string _characterKey = AddressKeys.StubCharacter;
+        [SerializeField] private string _characterKey = AddressKeys.Character;
         [Tooltip("Радиус окружности, по которой расставляются участники.")]
         [SerializeField, Min(0f)] private float _spawnRadius = 3f;
         [Tooltip("Высота спавна над столом.")]
         [SerializeField] private float _spawnHeight = 1f;
-        [Tooltip("Ниже этой высоты участник считается выпавшим со стола.")]
+        [Tooltip("Ниже этой высоты участник считается выпавшим со стола (страховка, если у арены нет kill-зоны).")]
         [SerializeField] private float _eliminationHeight = -5f;
+
+        [Header("Выпадение")]
+        [Tooltip("Выпавший возвращается на стол со сброшенным встряском, а не выбывает. Режимы раундов — этап 6.")]
+        [SerializeField] private bool _respawnOnFall;
+
+        [Header("Предметы для броска")]
+        [SerializeField] private string _itemKey = AddressKeys.ThrowableItem;
+        [SerializeField, Range(0, 8)] private int _itemCount = 4;
+        [Tooltip("Радиус, внутри которого раскладываются предметы (и куда возвращаются упавшие).")]
+        [SerializeField, Min(0f)] private float _itemSpawnRadius = 2f;
 
         [Header("Цвета")]
         [SerializeField] private Color[] _playerColors =
@@ -54,6 +64,10 @@ namespace TinyTumble.Core.Configs
         public float SpawnRadius => _spawnRadius;
         public float SpawnHeight => _spawnHeight;
         public float EliminationHeight => _eliminationHeight;
+        public bool RespawnOnFall => _respawnOnFall;
+        public string ItemKey => _itemKey;
+        public int ItemCount => _itemCount;
+        public float ItemSpawnRadius => _itemSpawnRadius;
         public Color BotColor => _botColor;
 
         public Color GetPlayerColor(int playerIndex)

@@ -11,6 +11,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
     ///   -tt-clients 1                 сколько клиентов в сессии (знают и хост, и клиенты)
     ///   -tt-duration 6                сколько секунд идёт матч в сценарии full
     ///   -tt-netsim 60,10,2            задержка мс, джиттер мс, потери % (на каждой стороне)
+    ///   -tt-bots 1                    сколько ботов в матче (хост); по умолчанию — из MatchConfig.
+    ///                                 Выпавшие в автотесте всегда возрождаются: бот дерётся всерьёз, а тест проверяет сеть,
+    ///                                 и исход драки не должен досрочно заканчивать матч
     ///   -tt-scenario full|hostleave|hostcrash|clientdrop
     ///       full       — лобби → матч → итоги → лобби, проверка движения своего и чужого кубика;
     ///       hostleave  — хост выходит в меню посреди матча, клиент становится новым хостом;
@@ -28,6 +31,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
         public float MatchDuration { get; private set; } = 6f;
         public string NetworkSimulator { get; private set; }
         public AutoTestScenario Scenario { get; private set; } = AutoTestScenario.Full;
+
+        /// <summary>-1 — не задано: как в MatchConfig.</summary>
+        public int Bots { get; private set; } = -1;
 
         public static bool TryParse(string[] args, out AutoTestOptions options)
         {
@@ -62,6 +68,11 @@ namespace TinyTumble.Bootstrap.Diagnostics
             }
 
             options.NetworkSimulator = GetValue(args, "-tt-netsim");
+
+            if (int.TryParse(GetValue(args, "-tt-bots"), out int bots) && bots >= 0)
+            {
+                options.Bots = bots;
+            }
 
             string scenario = GetValue(args, "-tt-scenario");
             if (!string.IsNullOrEmpty(scenario))
