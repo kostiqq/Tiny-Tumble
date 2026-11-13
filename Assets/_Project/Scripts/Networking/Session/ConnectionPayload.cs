@@ -7,12 +7,13 @@ namespace TinyTumble.Networking.Session
     /// Данные запроса на подключение (little-endian):
     /// версия протокола (4) + число локальных игроков (1) + ключ игрока (8)
     /// + адрес преемника: тип (1), значение (8), порт (2) + метка сессии, к которой клиент возвращается, или 0 (8)
-    /// + пати: id (8), сколько слотов занимает вся пати (1), флаги (1: бит 0 — лидер).
+    /// + пати: id (8), сколько слотов занимает вся пати (1), флаги (1: бит 0 — лидер, бит 1 — нашли поиском).
     /// </summary>
     public readonly struct ConnectionPayload
     {
         private const int Size = 42;
         private const byte LeaderFlag = 1;
+        private const byte MatchmadeFlag = 2;
 
         public readonly int ProtocolVersion;
         public readonly int LocalPlayerCount;
@@ -59,7 +60,7 @@ namespace TinyTumble.Networking.Session
             WriteULong(bytes, 24, SessionToken);
             WriteULong(bytes, 32, Party.PartyId);
             bytes[40] = (byte)Math.Min(Party.Size, byte.MaxValue);
-            bytes[41] = Party.IsLeader ? LeaderFlag : (byte)0;
+            bytes[41] = (byte)((Party.IsLeader ? LeaderFlag : 0) | (Party.IsMatchmade ? MatchmadeFlag : 0));
             return bytes;
         }
 
@@ -74,7 +75,7 @@ namespace TinyTumble.Networking.Session
             int version = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
             ushort port = (ushort)(bytes[22] | (bytes[23] << 8));
             SessionEndpoint successor = SessionEndpoint.FromRaw(bytes[13], ReadULong(bytes, 14), port);
-            var party = new PartyTicket(ReadULong(bytes, 32), bytes[40], (bytes[41] & LeaderFlag) != 0);
+            var party = new PartyTicket(ReadULong(bytes, 32), bytes[40], (bytes[41] & LeaderFlag) != 0, (bytes[41] & MatchmadeFlag) != 0);
             payload = new ConnectionPayload(version, bytes[4], ReadULong(bytes, 5), successor, ReadULong(bytes, 24), party);
             return true;
         }
@@ -118,11 +119,15 @@ namespace TinyTumble.Networking.Session
 
         public readonly bool IsLeader;
 
-        public PartyTicket(ulong partyId, int size, bool isLeader)
+        /// <summary>Пати нашла это лобби поиском: пускать, только пока хост ищет игроков, и проверить пинг.</summary>
+        public readonly bool IsMatchmade;
+
+        public PartyTicket(ulong partyId, int size, bool isLeader, bool isMatchmade = false)
         {
             PartyId = partyId;
             Size = size;
             IsLeader = isLeader;
+            IsMatchmade = isMatchmade;
         }
 
         /// <summary>Друг подключается по приглашению или адресу и становится участником пати хоста.</summary>
@@ -154,8 +159,10 @@ namespace TinyTumble.Networking.Session
         /// <param name="heldForThisParty">Сколько мест хост уже держит для пати клиента (пришёл не первым).</param>
         /// <param name="heldForOtherParties">Сколько мест хост держит для других подключающихся пати.</param>
         /// <returns>Пустая строка, если допущен, иначе код из <see cref="DisconnectReasons"/>.</returns>
+        /// <param name="openForMatchmaking">Хост сейчас ищет игроков: пришедших по поиску пускаем только тогда.</param>
         public static string Evaluate(in ConnectionPayload payload, bool payloadValid, int protocolVersion, ulong sessionToken,
-            bool hasReservation, int freeSlots, bool acceptingPlayers, ulong hostPartyId, int heldForThisParty, int heldForOtherParties)
+            bool hasReservation, int freeSlots, bool acceptingPlayers, ulong hostPartyId, int heldForThisParty, int heldForOtherParties,
+            bool openForMatchmaking = false)
         {
             if (!payloadValid || payload.ProtocolVersion != protocolVersion)
             {
@@ -177,6 +184,12 @@ namespace TinyTumble.Networking.Session
             if (!acceptingPlayers)
             {
                 return DisconnectReasons.MatchInProgress;
+            }
+
+            // Лобби нашли в списке, но хост уже не ищет: объявление устарело (матч начался, лобби закрыли).
+            if (payload.Party.IsMatchmade && !openForMatchmaking)
+            {
+                return DisconnectReasons.LobbyClosed;
             }
 
             // Клиент без локальных игроков всё равно займёт слот: при входе он присоединяет клавиатуру.

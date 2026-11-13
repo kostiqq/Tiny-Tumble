@@ -27,8 +27,8 @@ namespace TinyTumble.Networking.Steam
     public sealed class SteamInvites : ISessionInvites, ITickable, IDisposable
     {
         private const string LogTag = "Steam";
-        private const string HostKey = "tt_host";
-        private const string VersionKey = "tt_ver";
+        public const string HostKey = "tt_host";
+        public const string VersionKey = "tt_ver";
         private const string ConnectLobbyArgument = "+connect_lobby";
 
         private readonly SteamService _steam;
@@ -72,6 +72,12 @@ namespace TinyTumble.Networking.Steam
         }
 
         public bool CanInvite => _steam.IsReady && _lobby.IsValid();
+
+        /// <summary>Лобби Steam текущей сессии (или Nil). Его же публикует каталог поиска игры.</summary>
+        public CSteamID Lobby => _lobby;
+
+        /// <summary>Мы владелец лобби: только владелец меняет его данные и тип.</summary>
+        public bool OwnsLobby => _steam.IsReady && _lobby.IsValid() && SteamMatchmaking.GetLobbyOwner(_lobby).m_SteamID == _steam.LocalSteamId;
 
         public bool OpenInviteDialog()
         {

@@ -16,14 +16,17 @@ namespace TinyTumble.Bootstrap.Diagnostics
     ///                                 и исход драки не должен досрочно заканчивать матч
     ///   -tt-party leader|member       роль клиента в сценарии partymove
     ///   -tt-target 127.0.0.1:7777     куда лидер уводит пати в сценарии partymove
-    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost|partymove
+    ///   -tt-search 20                 matchmake: сколько искать игроков до старта с ботами, с
+    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost|partymove|matchmake
     ///       full       — лобби → матч → итоги → лобби, проверка движения своего и чужого кубика;
     ///       hostleave  — хост выходит в меню посреди матча, клиент становится новым хостом;
     ///       hostcrash  — процесс хоста убит посреди матча; первый по плану клиент становится хостом, остальные к нему переходят;
     ///       clientdrop — у клиента на 8 с пропадает сеть посреди матча; он возвращается, досматривает матч и попадает в лобби в свой слот;
     ///       steamhost  — только хост, нужен Steam: хост через Steam, лобби для приглашений открылось и закрылось;
     ///       partymove  — три копии: хост (цель), лидер пати (сначала сам хост своей пати) и участник; пати переезжает
-    ///                    к хосту и возвращается к лидеру.
+    ///                    к хосту и возвращается к лидеру;
+    ///       matchmake  — несколько копий (-tt-clients — сколько всего) ищут игру локальным матчмейкером, сходятся в одно
+    ///                    лобби, по сроку поиска начинается матч, пустые места занимают боты.
     /// </summary>
     public sealed class AutoTestOptions
     {
@@ -39,6 +42,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         /// <summary>partymove: этот клиент — лидер пати (хостит её и уводит), иначе участник.</summary>
         public bool IsPartyLeader { get; private set; }
+
+        /// <summary>matchmake: срок поиска до старта с ботами, с.</summary>
+        public float SearchSeconds { get; private set; } = 20f;
 
         /// <summary>partymove: куда лидер уводит пати.</summary>
         public string Target { get; private set; } = "127.0.0.1:7777";
@@ -83,6 +89,11 @@ namespace TinyTumble.Bootstrap.Diagnostics
             if (int.TryParse(GetValue(args, "-tt-bots"), out int bots) && bots >= 0)
             {
                 options.Bots = bots;
+            }
+
+            if (float.TryParse(GetValue(args, "-tt-search"), NumberStyles.Float, CultureInfo.InvariantCulture, out float search) && search > 0f)
+            {
+                options.SearchSeconds = search;
             }
 
             options.IsPartyLeader = string.Equals(GetValue(args, "-tt-party"), "leader", StringComparison.OrdinalIgnoreCase);
@@ -132,5 +143,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         /// <summary>Хост + лидер пати + участник: пати переезжает к хосту целиком и возвращается к лидеру.</summary>
         PartyMove,
+
+        /// <summary>Все копии ищут игру, сходятся в одно лобби и по сроку поиска играют матч с ботами на пустых местах.</summary>
+        Matchmake,
     }
 }

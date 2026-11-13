@@ -67,6 +67,9 @@ namespace TinyTumble.Networking.Party
         /// <summary>Сколько переездов закончилось с запуска (для автотеста).</summary>
         public int CompletedMoves { get; private set; }
 
+        /// <summary>Текущий (или последний) переезд: куда, зачем и найдено ли место поиском.</summary>
+        public PartyMove CurrentMove { get; private set; }
+
         public bool CanMove => _state.IsLeader && !IsMoving && !_session.IsRecovering
             && _session.Role.CurrentValue != SessionRole.None && _lobby.IsAttached && _lobby.HostState == GameState.Lobby;
 
@@ -87,6 +90,12 @@ namespace TinyTumble.Networking.Party
 
         public bool MoveTo(SessionEndpoint host)
         {
+            return MoveTo(host, false);
+        }
+
+        /// <param name="matchmade">Лобби найдено поиском: новый хост пустит пати, только пока ищет игроков, и проверит пинг.</param>
+        public bool MoveTo(SessionEndpoint host, bool matchmade)
+        {
             if (!CanMove || !host.IsValid)
             {
                 return false;
@@ -99,22 +108,23 @@ namespace TinyTumble.Networking.Party
                 return false;
             }
 
-            return Request(host);
+            return Request(host, matchmade);
         }
 
         public bool Regroup()
         {
-            return CanRegroup && Request(SessionEndpoint.None);
+            return CanRegroup && Request(SessionEndpoint.None, false);
         }
 
-        private bool Request(SessionEndpoint target)
+        private bool Request(SessionEndpoint target, bool matchmade)
         {
             if (_session.IsHost)
             {
                 ulong partyId = _state.PartyId;
-                return _lobby.StartPartyDeparture(new PartyMove(partyId, target, _identity.Key, _lobby.CountPartySlots(partyId)));
+                return _lobby.StartPartyDeparture(new PartyMove(partyId, target, _identity.Key, _lobby.CountPartySlots(partyId), default, matchmade));
             }
 
+            // Гостем у чужого хоста поиск не ведут (его ведёт хост сессии), поэтому клиенту флаг поиска не нужен.
             return _lobby.RequestPartyMove(target);
         }
 
@@ -133,6 +143,7 @@ namespace TinyTumble.Networking.Party
             // Флаг ставим сразу, внутри сетевого сообщения: если старый хост пропадёт раньше, чем мы сами
             // закроем сессию, восстановление не должно принять это за обрыв.
             IsMoving = true;
+            CurrentMove = move;
             bool wasHost = _session.IsHost;
             bool isLeader = move.LeaderKey == _identity.Key;
             EndpointKind transport = _session.TransportKind;
@@ -180,7 +191,8 @@ namespace TinyTumble.Networking.Party
                 if (!move.IsRegroup)
                 {
                     _log.Info(LogTag, $"Moving the party to {move.Target}...");
-                    SessionStartResult moved = await _session.ConnectWithRetriesAsync(move.Target, _config.ConnectTimeout, 0, ticket, token);
+                    PartyTicket moveTicket = _state.Ticket(move.PartySize, move.Matchmade);
+                    SessionStartResult moved = await _session.ConnectWithRetriesAsync(move.Target, _config.ConnectTimeout, 0, moveTicket, token);
                     if (moved.Success)
                     {
                         _log.Info(LogTag, "The party moved.");

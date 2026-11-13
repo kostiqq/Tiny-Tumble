@@ -405,7 +405,7 @@ namespace TinyTumble.Networking.Session
             _lobby.GetPartyHolds(valid ? payload.Party.PartyId : 0, out int heldForParty, out int heldForOthers);
             string reason = ConnectionAdmission.Evaluate(payload, valid, _config.ProtocolVersion, _lobby.SessionToken,
                 valid && _lobby.HasReservation(payload.PlayerKey), _lobby.FreeSlots, _lobby.IsAcceptingPlayers,
-                _lobby.HostPartyId, heldForParty, heldForOthers);
+                _lobby.HostPartyId, heldForParty, heldForOthers, _lobby.Matchmaking.Open);
             response.Approved = string.IsNullOrEmpty(reason);
             response.Reason = reason;
             if (response.Approved)

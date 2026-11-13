@@ -158,7 +158,7 @@ namespace TinyTumble.Networking.Session
         private async UniTask<bool> BecomeHostAsync(ulong sessionToken, SlotTable slots, CancellationToken token)
         {
             _log.Info(LogTag, "We are next in line: becoming the host.");
-            SessionStartResult result = await _session.StartHostAsync(HostSeed.Migrated(sessionToken, slots), token);
+            SessionStartResult result = await _session.StartHostAsync(HostSeed.Migrated(sessionToken, slots, _lobby.LastKnownMatchmaking), token);
             if (!result.Success)
             {
                 _log.Warning(LogTag, $"Could not become the host: {result.Reason}.");

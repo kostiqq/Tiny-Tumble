@@ -17,7 +17,7 @@ namespace TinyTumble.Networking.Debugging
 {
     /// <summary>
     /// Команды консоли для сети: net.host, net.join, net.invite, net.leave, net.status, net.sim, net.drop,
-    /// net.party.move, net.party.home.
+    /// net.party.move, net.party.home, net.find, net.find.cancel.
     /// </summary>
     public sealed class NetworkDebugCommands : IStartable, IDisposable
     {
@@ -35,6 +35,7 @@ namespace TinyTumble.Networking.Debugging
         private readonly SteamService _steam;
         private readonly ISessionInvites _invites;
         private readonly IParty _party;
+        private readonly IMatchmaking _matchmaking;
         private readonly IGameLog _log;
         private readonly List<IDisposable> _registrations = new List<IDisposable>();
         private readonly StringBuilder _builder = new StringBuilder();
@@ -51,6 +52,7 @@ namespace TinyTumble.Networking.Debugging
             SteamService steam,
             ISessionInvites invites,
             IParty party,
+            IMatchmaking matchmaking,
             IGameLog log)
         {
             _console = console;
@@ -64,6 +66,7 @@ namespace TinyTumble.Networking.Debugging
             _steam = steam;
             _invites = invites;
             _party = party;
+            _matchmaking = matchmaking;
             _log = log;
         }
 
@@ -78,6 +81,8 @@ namespace TinyTumble.Networking.Debugging
             _registrations.Add(_console.Register("net.drop", "оборвать связь в обе стороны: net.drop <секунды> (по умолчанию 8)", OnDrop));
             _registrations.Add(_console.Register("net.party.move", "лидер уводит пати к другому хосту: net.party.move <ip[:port]> или steam:<SteamID>", OnPartyMove));
             _registrations.Add(_console.Register("net.party.home", "лидер уводит пати из чужой сессии к себе", OnPartyHome));
+            _registrations.Add(_console.Register("net.find", "найти игру: из меню или лидером своей пати в своём лобби", OnFind));
+            _registrations.Add(_console.Register("net.find.cancel", "прекратить поиск игры", OnFindCancel));
         }
 
         public void Dispose()
@@ -171,6 +176,21 @@ namespace TinyTumble.Networking.Debugging
             }
         }
 
+        private void OnFind(string arguments)
+        {
+            if (!_matchmaking.StartSearch())
+            {
+                _log.Warning(LogTag, !_matchmaking.IsAvailable
+                    ? "Nowhere to search: Steam is not running (the local matchmaker works only in the editor and development builds over IP)."
+                    : "Cannot search now: only from the main menu, or as the party leader hosting a lobby with just your party.");
+            }
+        }
+
+        private void OnFindCancel(string arguments)
+        {
+            _matchmaking.Cancel();
+        }
+
         private void OnLeave(string arguments)
         {
             _flow.GoToAsync(GameState.MainMenu).Forget();
@@ -184,7 +204,19 @@ namespace TinyTumble.Networking.Debugging
                 .Append(", host state: ").Append(_lobby.HostState)
                 .Append(", transport: ").Append(_networkSession.TransportKind)
                 .Append(", host preference: ").Append(_transports.HostPreference)
-                .Append(", party: ").Append(_party.PartyId.ToString("X")).Append(_party.IsLeader ? " (leader)" : string.Empty);
+                .Append(", party: ").Append(_party.PartyId.ToString("X")).Append(_party.IsLeader ? " (leader)" : string.Empty)
+                .Append(", search: ").Append(_matchmaking.State);
+
+            float secondsLeft = _matchmaking.SecondsLeft;
+            if (secondsLeft >= 0f)
+            {
+                _builder.Append(", bots in ").Append(Math.Ceiling(secondsLeft)).Append(" s");
+            }
+
+            if (_matchmaking.IsMatchmadeSession)
+            {
+                _builder.Append(", matchmade");
+            }
 
             if (_steam.IsReady)
             {

@@ -9,7 +9,7 @@ namespace TinyTumble.Core.Configs
     public sealed class SessionConfig : ScriptableObject
     {
         [Tooltip("Увеличивайте при несовместимых изменениях сетевого протокола: клиент другой версии не войдёт.")]
-        [SerializeField, Min(1)] private int _protocolVersion = 4;
+        [SerializeField, Min(1)] private int _protocolVersion = 5;
 
         [SerializeField] private ushort _port = 7777;
 
@@ -31,6 +31,25 @@ namespace TinyTumble.Core.Configs
 
         [Tooltip("Сколько клиент ждёт очередного преемника при миграции хоста, прежде чем пробовать следующего.")]
         [SerializeField, Min(1f)] private float _migrationConnectTimeout = 6f;
+
+        [Header("Поиск игры")]
+        [Tooltip("Сколько ищем игроков, прежде чем начать матч с ботами на свободных местах, с.")]
+        [SerializeField, Min(5f)] private float _searchTimeout = 60f;
+
+        [Tooltip("Сколько ищем только ближние лобби (фильтр расстояния Steam «близко»), потом — «по умолчанию», с.")]
+        [SerializeField, Min(0f)] private float _closeSearchSeconds = 15f;
+
+        [Tooltip("Как часто повторять поиск, пока наше лобби ждёт игроков, с.")]
+        [SerializeField, Min(1f)] private float _searchInterval = 4f;
+
+        [Tooltip("Лобби с оценкой пинга выше этого не рассматриваем, мс RTT. Стартовое значение, уточнить на плейтесте.")]
+        [SerializeField, Min(10)] private int _maxEstimatedPingMs = 120;
+
+        [Tooltip("Хост отправляет найденную поиском пати обратно, если измеренный RTT выше этого, мс.")]
+        [SerializeField, Min(10)] private int _maxMeasuredRttMs = 200;
+
+        [Tooltip("Сколько хост меряет RTT пришедшей по поиску пати, с.")]
+        [SerializeField, Min(0.5f)] private float _pingProbeSeconds = 3f;
 
         [Header("Синхронизация движения")]
         [Tooltip("Хост рассылает состояние персонажей раз в столько тиков физики (тик = 0.02 с).")]
@@ -59,6 +78,12 @@ namespace TinyTumble.Core.Configs
         public float ReconnectWindow => _reconnectWindow;
         public float ReservedSlotTimeout => _reservedSlotTimeout;
         public float MigrationConnectTimeout => _migrationConnectTimeout;
+        public float SearchTimeout => _searchTimeout;
+        public float CloseSearchSeconds => _closeSearchSeconds;
+        public float SearchInterval => _searchInterval;
+        public int MaxEstimatedPingMs => _maxEstimatedPingMs;
+        public int MaxMeasuredRttMs => _maxMeasuredRttMs;
+        public float PingProbeSeconds => _pingProbeSeconds;
         public int SnapshotIntervalTicks => _snapshotIntervalTicks;
         public float InterpolationDelay => _interpolationDelay;
         public float PredictionTolerance => _predictionTolerance;

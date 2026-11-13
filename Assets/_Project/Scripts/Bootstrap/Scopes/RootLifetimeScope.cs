@@ -22,6 +22,7 @@ using TinyTumble.Infrastructure.Scenes;
 using TinyTumble.Networking.Debugging;
 using TinyTumble.Networking.Flow;
 using TinyTumble.Networking.Lobby;
+using TinyTumble.Networking.Matchmaking;
 using TinyTumble.Networking.Party;
 using TinyTumble.Networking.Session;
 using TinyTumble.Networking.Steam;
@@ -115,7 +116,14 @@ namespace TinyTumble.Bootstrap.Scopes
             // Пати: переезды между сессиями. IParty и IInitializable — через реализованные интерфейсы.
             builder.RegisterEntryPoint<PartyService>().AsSelf();
             builder.RegisterEntryPoint<SessionRecovery>();
-            builder.RegisterEntryPoint<SteamInvites>(); // ISessionInvites и ITickable — через реализованные интерфейсы.
+            // Поиск игры: каталоги лобби (Steam; локальный — только редактор и development-сборка), сервис поиска
+            // и проверка пинга пришедших по поиску. ITickable и IMatchmaking — через реализованные интерфейсы.
+            builder.RegisterEntryPoint<SteamLobbyDirectory>().AsSelf();
+            builder.RegisterEntryPoint<LocalLobbyDirectory>().AsSelf();
+            builder.Register<LobbyDirectories>(Lifetime.Singleton);
+            builder.RegisterEntryPoint<MatchmakingService>().AsSelf();
+            builder.RegisterEntryPoint<MatchmadePingGuard>();
+            builder.RegisterEntryPoint<SteamInvites>().AsSelf(); // ISessionInvites и ITickable — через реализованные интерфейсы; сам класс нужен каталогу Steam.
             builder.RegisterEntryPoint<NetworkGameFlow>(); // IGameFlow и IInitializable — через реализованные интерфейсы.
             builder.Register<SessionLauncher>(Lifetime.Singleton).As<ISessionLauncher>();
             builder.RegisterEntryPoint<NetworkDebugCommands>();

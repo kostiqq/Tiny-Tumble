@@ -14,6 +14,7 @@ using TinyTumble.Core.Scenes;
 using TinyTumble.Gameplay.Characters;
 using TinyTumble.Gameplay.Match;
 using TinyTumble.Networking.Debugging;
+using TinyTumble.Networking.Matchmaking;
 using TinyTumble.Networking.Party;
 using TinyTumble.Networking.Session;
 using TinyTumble.Networking.Transport;
@@ -60,6 +61,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
         private readonly SessionTransports _transports;
         private readonly ISessionInvites _invites;
         private readonly PartyService _party;
+        private readonly MatchmakingService _matchmaking;
         private readonly IGameLog _log;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<ulong> _clientsBuffer = new List<ulong>();
@@ -79,6 +81,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
             SessionTransports transports,
             ISessionInvites invites,
             PartyService party,
+            MatchmakingService matchmaking,
             IGameLog log)
         {
             _options = options;
@@ -94,6 +97,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
             _transports = transports;
             _invites = invites;
             _party = party;
+            _matchmaking = matchmaking;
             _log = log;
         }
 
@@ -115,7 +119,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
             try
             {
                 Prepare();
-                UniTask<string> scenario = _options.IsHost ? RunHostAsync(token)
+                UniTask<string> scenario = _options.Scenario == AutoTestScenario.Matchmake ? RunMatchmakeAsync(token)
+                    : _options.IsHost ? RunHostAsync(token)
                     : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? RunPartyLeaderAsync(token)
                     : RunClientAsync(token);
                 UniTask timeout = UniTask.Delay(TimeSpan.FromSeconds(OverallTimeout), ignoreTimeScale: true, cancellationToken: token);
@@ -131,7 +136,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
                 failure = exception.GetType().Name + ": " + exception.Message;
             }
 
-            string role = _options.IsHost ? "host" : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? "party leader" : "client";
+            string role = _options.Scenario == AutoTestScenario.Matchmake ? (_session.IsHost ? "matchmade host" : "matchmade client")
+                : _options.IsHost ? "host" : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? "party leader" : "client";
             if (failure == null)
             {
                 _log.Info(LogTag, $"[AutoTest] RESULT PASS {role} ({_options.Scenario})");
@@ -514,6 +520,66 @@ namespace TinyTumble.Bootstrap.Diagnostics
             }
 
             Step($"back in lobby as P{ownSlot + 1}, leaving");
+            await _flow.GoToAsync(GameState.MainMenu);
+            return null;
+        }
+
+        // ---------- Поиск игры ----------
+
+        /// <summary>
+        /// Все копии ищут игру. Ждём, пока все окажутся в одной сессии, затем старта по сроку поиска: в матче все люди
+        /// и боты на пустых местах (сессия собрана поиском). Хост заканчивает матч, клиенты после итогов уходят.
+        /// </summary>
+        private async UniTask<string> RunMatchmakeAsync(CancellationToken token)
+        {
+            await WaitForState(GameState.MainMenu, token);
+            _matchmaking.SearchTimeoutOverride = _options.SearchSeconds;
+            if (!_matchmaking.StartSearch())
+            {
+                return $"could not start searching: available {_matchmaking.IsAvailable}";
+            }
+
+            int everyone = _options.Clients;
+            Step($"searching, expecting {everyone} players in one lobby");
+            if (!await WaitUntil(() => !_party.IsMoving && _session.Role.CurrentValue != SessionRole.None && CountConnectedPlayers() >= everyone, token))
+            {
+                return $"players did not meet: {CountConnectedPlayers()} of {everyone} in our session, search {_matchmaking.State}";
+            }
+
+            Step($"met {everyone} players as {(_session.IsHost ? "host" : "client")}, search {_matchmaking.State}, {_matchmaking.SecondsLeft:0} s to the match");
+            MatchEntryPoint match = await WaitForMatch(everyone, token);
+            if (match == null)
+            {
+                return "the match did not start when the search time was up";
+            }
+
+            int bots = match.Characters.Count - CountHumans(match);
+            int expectedBots = _lobby.Capacity - everyone;
+            if (bots != expectedBots || !_matchmaking.IsMatchmadeSession)
+            {
+                return $"expected {expectedBots} bot(s) in a matchmade match, got {bots}, matchmade {_matchmaking.IsMatchmadeSession}";
+            }
+
+            Step($"matchmade match: {everyone} players and {bots} bot(s)");
+            if (_session.IsHost)
+            {
+                await UniTask.Delay(TimeSpan.FromSeconds(3), cancellationToken: token);
+                _matchEnded.Publish(new MatchEnded(MatchEnded.NoWinner));
+                await WaitForState(GameState.Results, token);
+                await UniTask.Delay(TimeSpan.FromSeconds(1), cancellationToken: token);
+                await _flow.GoToAsync(GameState.Lobby);
+                await WaitForState(GameState.Lobby, token);
+                if (!await WaitUntil(() => CountConnectedRemoteSlots() == 0, token))
+                {
+                    return "clients did not leave";
+                }
+
+                return null;
+            }
+
+            await WaitForState(GameState.Results, token);
+            await WaitForState(GameState.Lobby, token);
+            Step("back in lobby, leaving");
             await _flow.GoToAsync(GameState.MainMenu);
             return null;
         }

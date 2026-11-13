@@ -36,6 +36,10 @@ namespace TinyTumble.UI.Session
                     return "По этому адресу уже идёт другая игра.";
                 case DisconnectReasons.PartyTooBig:
                     return "В лобби не хватает мест на всю пати.";
+                case DisconnectReasons.LobbyClosed:
+                    return "Хост уже не ищет игроков.";
+                case DisconnectReasons.HighPing:
+                    return "Слишком большой пинг до хоста.";
                 default:
                     return reason;
             }

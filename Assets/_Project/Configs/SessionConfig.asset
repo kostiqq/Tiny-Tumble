@@ -12,7 +12,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1e81336a14415474d9ec67a0c4046aac, type: 3}
   m_Name: SessionConfig
   m_EditorClassIdentifier: TinyTumble.Core::TinyTumble.Core.Configs.SessionConfig
-  _protocolVersion: 4
+  _protocolVersion: 5
   _port: 7777
   _connectTimeout: 10
   _clientLoadTimeout: 30

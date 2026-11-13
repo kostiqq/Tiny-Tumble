@@ -63,6 +63,7 @@ namespace TinyTumble.Networking.Lobby
         // Последнее, что клиент знал о сессии. Переживает её конец: по этому восстанавливаются после обрыва.
         private SlotTable _lastSlots;
         private MigrationPlan _lastPlan;
+        private MatchmakingInfo _lastMatchmaking;
         private bool _hostAnnouncedLeaving;
 
         // Клиент: команда переезда пришла раньше нашего слота (см. OnPartyMove).
@@ -105,6 +106,12 @@ namespace TinyTumble.Networking.Lobby
         /// </summary>
         public event Action<PartyMove> PartyMoveStarted;
 
+        /// <summary>Изменилось состояние поиска игры в сессии.</summary>
+        public event Action<MatchmakingInfo> MatchmakingChanged;
+
+        /// <summary>Хост: клиент ответил на пинг; второй аргумент — RTT в секундах.</summary>
+        public event Action<ulong, float> PongReceived;
+
         public IReadOnlyList<PlayerSlot> Slots => _slots;
 
         public int Capacity => SlotTable.Capacity;
@@ -123,6 +130,12 @@ namespace TinyTumble.Networking.Lobby
         public GameState HostState => _state != null ? _state.Phase.State : GameState.None;
 
         public ulong SessionToken => IsHost ? _sessionToken : _lastPlan.SessionToken;
+
+        /// <summary>Поиск игры в текущей сессии (у всех одинаковый).</summary>
+        public MatchmakingInfo Matchmaking => _state != null ? _state.Matchmaking : default;
+
+        /// <summary>Клиент: последнее известное состояние поиска (переживает конец сессии, нужно преемнику).</summary>
+        public MatchmakingInfo LastKnownMatchmaking => _lastMatchmaking;
 
         /// <summary>Клиент: последний известный состав (переживает конец сессии).</summary>
         public SlotTable LastKnownSlots => _lastSlots;
@@ -239,7 +252,7 @@ namespace TinyTumble.Networking.Lobby
             SessionEndpoint target = move.Target;
             SessionEndpoint leader = move.LeaderEndpoint;
             _state.PartyMoveRpc(move.PartyId, move.LeaderKey, (byte)move.PartySize, (byte)target.Kind, target.Address, target.Port,
-                (byte)leader.Kind, leader.Address, leader.Port);
+                (byte)leader.Kind, leader.Address, leader.Port, move.Matchmade, (byte)move.Reason);
             _log.Info(LogTag, move.IsRegroup
                 ? $"Party {move.PartyId:X} leaves to regroup at its leader."
                 : $"Party {move.PartyId:X} moves to {target}.");
@@ -255,6 +268,58 @@ namespace TinyTumble.Networking.Lobby
             }
 
             return true;
+        }
+
+        /// <summary>Хост: отправить пати обратно к её лидеру (например, из-за пинга). Она уйдёт целиком.</summary>
+        public bool SendPartyBack(ulong partyId, PartyMoveReason reason)
+        {
+            if (_state == null || !IsHost || partyId == HostPartyId)
+            {
+                return false;
+            }
+
+            SlotTable slots = _state.Slots;
+            ulong leader = slots.LeaderOf(partyId);
+            if (leader == 0)
+            {
+                return false;
+            }
+
+            return StartPartyDeparture(new PartyMove(partyId, SessionEndpoint.None, leader, slots.CountParty(partyId), default, false, reason));
+        }
+
+        /// <summary>Хост: в какой пати клиент и пришёл ли он по поиску.</summary>
+        public bool TryGetPeerParty(ulong clientId, out ulong partyId, out bool matchmade)
+        {
+            if (_peerParties.TryGetValue(clientId, out PeerParty party))
+            {
+                partyId = party.PartyId;
+                matchmade = party.Matchmade;
+                return true;
+            }
+
+            partyId = 0;
+            matchmade = false;
+            return false;
+        }
+
+        /// <summary>Хост: состояние поиска для всей сессии.</summary>
+        public void SetMatchmaking(MatchmakingInfo info)
+        {
+            if (_state != null && IsHost)
+            {
+                _state.SetMatchmaking(info);
+                _lastMatchmaking = info;
+            }
+        }
+
+        /// <summary>Хост: измерить RTT до клиента. Ответ придёт в <see cref="PongReceived"/>.</summary>
+        public void SendPing(ulong clientId)
+        {
+            if (_state != null && IsHost && clientId != NetworkManager.ServerClientId)
+            {
+                _state.SendPing(clientId, Time.realtimeSinceStartup);
+            }
         }
 
         /// <summary>Клиент-лидер: попросить хоста увести нашу пати (Target None — собраться у нас).</summary>
@@ -519,6 +584,55 @@ namespace TinyTumble.Networking.Lobby
             _lastPlan = plan;
         }
 
+        public void OnMatchmakingChanged(MatchmakingInfo info)
+        {
+            _lastMatchmaking = info;
+            Action<MatchmakingInfo> handlers = MatchmakingChanged;
+            if (handlers == null)
+            {
+                return;
+            }
+
+            foreach (Delegate handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((Action<MatchmakingInfo>)handler).Invoke(info);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
+            }
+        }
+
+        public void OnPong(ulong clientId, float hostTime)
+        {
+            if (!IsHost)
+            {
+                return;
+            }
+
+            float rtt = Time.realtimeSinceStartup - hostTime;
+            Action<ulong, float> handlers = PongReceived;
+            if (handlers == null)
+            {
+                return;
+            }
+
+            foreach (Delegate handler in handlers.GetInvocationList())
+            {
+                try
+                {
+                    ((Action<ulong, float>)handler).Invoke(clientId, rtt);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
+            }
+        }
+
         public void OnHostLeaving()
         {
             _hostAnnouncedLeaving = true;
@@ -642,6 +756,11 @@ namespace TinyTumble.Networking.Lobby
             GameState initialState = _hostSeed.InitialState != GameState.None ? _hostSeed.InitialState : _localFlow.Current;
             _state.SetPhase(new SessionPhase(initialState, 0));
 
+            // После миграции поиск продолжается с тем же сроком; новая сессия начинает без поиска.
+            MatchmakingInfo matchmaking = _hostSeed.HasSlots ? _hostSeed.Matchmaking : default;
+            _state.SetMatchmaking(matchmaking);
+            _lastMatchmaking = matchmaking;
+
             SlotTable slots = default;
             if (_hostSeed.HasSlots)
             {
@@ -676,6 +795,7 @@ namespace TinyTumble.Networking.Lobby
         {
             _lastSlots = _state.Slots;
             _lastPlan = _state.Plan;
+            _lastMatchmaking = _state.Matchmaking;
             AdoptOwnParty(_lastSlots);
 
             IReadOnlyList<LocalPlayer> players = _localPlayers.Players;
@@ -736,8 +856,8 @@ namespace TinyTumble.Networking.Lobby
 
             _peers[clientId] = new PeerInfo(clientId, payload.PlayerKey, successor);
             _peerParties[clientId] = ConnectionAdmission.IsForeignParty(payload, HostPartyId)
-                ? new PeerParty(payload.Party.PartyId, payload.Party.IsLeader)
-                : new PeerParty(HostPartyId, false);
+                ? new PeerParty(payload.Party.PartyId, payload.Party.IsLeader, payload.Party.IsMatchmade)
+                : new PeerParty(HostPartyId, false, false);
 
             SlotTable slots = _state.Slots;
             if (_reservedSince.Remove(payload.PlayerKey) && slots.Reconnect(payload.PlayerKey, clientId) > 0)
@@ -1030,10 +1150,14 @@ namespace TinyTumble.Networking.Lobby
         public readonly ulong PartyId;
         public readonly bool IsLeader;
 
-        public PeerParty(ulong partyId, bool isLeader)
+        /// <summary>Пришёл по поиску: хост проверит его пинг.</summary>
+        public readonly bool Matchmade;
+
+        public PeerParty(ulong partyId, bool isLeader, bool matchmade)
         {
             PartyId = partyId;
             IsLeader = isLeader;
+            Matchmade = matchmade;
         }
     }
 
@@ -1060,12 +1184,16 @@ namespace TinyTumble.Networking.Lobby
         /// <summary>None — состояние берётся из текущей сцены хоста.</summary>
         public readonly GameState InitialState;
 
-        public HostSeed(ulong sessionToken, bool hasSlots, SlotTable slots, GameState initialState)
+        /// <summary>Поиск игры прежней сессии: новый хост продолжает ждать игроков с тем же сроком.</summary>
+        public readonly MatchmakingInfo Matchmaking;
+
+        public HostSeed(ulong sessionToken, bool hasSlots, SlotTable slots, GameState initialState, MatchmakingInfo matchmaking = default)
         {
             SessionToken = sessionToken;
             HasSlots = hasSlots;
             Slots = slots;
             InitialState = initialState;
+            Matchmaking = matchmaking;
         }
 
         public static HostSeed NewSession(ulong sessionToken)
@@ -1074,9 +1202,9 @@ namespace TinyTumble.Networking.Lobby
         }
 
         /// <summary>Миграция: прежний состав, все возвращаются в лобби.</summary>
-        public static HostSeed Migrated(ulong sessionToken, SlotTable slots)
+        public static HostSeed Migrated(ulong sessionToken, SlotTable slots, MatchmakingInfo matchmaking = default)
         {
-            return new HostSeed(sessionToken, true, slots, GameState.Lobby);
+            return new HostSeed(sessionToken, true, slots, GameState.Lobby, matchmaking);
         }
     }
 }

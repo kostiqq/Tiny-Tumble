@@ -41,9 +41,9 @@ namespace TinyTumble.Networking.Party
         }
 
         /// <summary>С чем подключаться, возвращаясь в сессию или переезжая: своя пати и её размер.</summary>
-        public PartyTicket Ticket(int partySize)
+        public PartyTicket Ticket(int partySize, bool matchmade = false)
         {
-            return new PartyTicket(PartyId, partySize, IsLeader);
+            return new PartyTicket(PartyId, partySize, IsLeader, matchmade);
         }
     }
 }
