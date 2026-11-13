@@ -94,6 +94,12 @@ namespace TinyTumble.Networking.Session
         /// </summary>
         public ushort HostPort { get; set; }
 
+        /// <summary>Через какой транспорт идёт текущая (или последняя) сессия: IP или Steam.</summary>
+        public EndpointKind TransportKind { get; private set; }
+
+        /// <summary>Клиент: адрес хоста, к которому мы подключены (или были до обрыва).</summary>
+        public SessionEndpoint ServerEndpoint => _server;
+
         public UniTask<SessionStartResult> StartHostAsync(CancellationToken cancellationToken)
         {
             return StartHostAsync(HostSeed.NewSession(NewSessionToken()), cancellationToken);
@@ -113,7 +119,15 @@ namespace TinyTumble.Networking.Session
                 await PrepareAsync(cancellationToken);
 
                 NetworkManager manager = _runtime.Manager;
-                _transport.ConfigureHost(HostPort);
+                // Преемник поднимает хост тем же транспортом, через который шла сессия: план миграции
+                // разослал остальным адрес именно этого типа.
+                EndpointKind kind = seed.HasSlots && _server.IsValid ? _server.Kind : _transport.PreferredHostKind;
+                if (!_transport.TryConfigureHost(kind, HostPort))
+                {
+                    _log.Warning(LogTag, $"Cannot host over {kind}.");
+                    return SessionStartResult.Fail(DisconnectReasons.StartFailed);
+                }
+
                 _transport.ConfigureTimeouts(_config.ConnectTimeout, _config.DisconnectTimeout);
                 manager.NetworkConfig.ConnectionData = BuildPayload(0);
                 Subscribe();
@@ -125,6 +139,7 @@ namespace TinyTumble.Networking.Session
                 }
 
                 LastDisconnectReason = DisconnectReasons.None;
+                TransportKind = kind;
                 _role.Value = SessionRole.Host;
                 _simulator.Apply(_runtime.Transport);
 
@@ -137,7 +152,8 @@ namespace TinyTumble.Networking.Session
                 }
 
                 _lobby.SpawnState(statePrefab, seed);
-                _log.Info(LogTag, seed.HasSlots ? $"Hosting on port {HostPort} as the new host of the session." : $"Hosting on port {HostPort}.");
+                string where = kind == EndpointKind.Ip ? "on port " + HostPort.ToString() : "over Steam";
+                _log.Info(LogTag, seed.HasSlots ? $"Hosting {where} as the new host of the session." : $"Hosting {where}.");
                 return SessionStartResult.Ok;
             }
             finally
@@ -209,6 +225,7 @@ namespace TinyTumble.Networking.Session
                 }
 
                 _server = host;
+                TransportKind = host.Kind;
                 LastDisconnectReason = DisconnectReasons.None;
                 _log.Info(LogTag, $"Connected as client {manager.LocalClientId}.");
                 return SessionStartResult.Ok;
@@ -279,7 +296,8 @@ namespace TinyTumble.Networking.Session
 
         private byte[] BuildPayload(ulong sessionToken)
         {
-            return new ConnectionPayload(_config.ProtocolVersion, _localPlayers.Players.Count, _identity.Key, HostPort, sessionToken).ToBytes();
+            SessionEndpoint successor = _transport.GetLocalSuccessor(HostPort);
+            return new ConnectionPayload(_config.ProtocolVersion, _localPlayers.Players.Count, _identity.Key, successor, sessionToken).ToBytes();
         }
 
         private void Subscribe()

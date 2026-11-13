@@ -5,27 +5,32 @@ namespace TinyTumble.Networking.Session
 {
     /// <summary>
     /// Данные запроса на подключение (little-endian):
-    /// версия протокола (4) + число локальных игроков (1) + ключ игрока (8) + порт, на котором клиент
-    /// поднимет хост при миграции (2) + метка сессии, к которой он возвращается, или 0 (8).
+    /// версия протокола (4) + число локальных игроков (1) + ключ игрока (8)
+    /// + адрес преемника: тип (1), значение (8), порт (2) + метка сессии, к которой клиент возвращается, или 0 (8).
     /// </summary>
     public readonly struct ConnectionPayload
     {
-        private const int Size = 23;
+        private const int Size = 32;
 
         public readonly int ProtocolVersion;
         public readonly int LocalPlayerCount;
         public readonly ulong PlayerKey;
-        public readonly ushort HostPort;
+
+        /// <summary>
+        /// Как клиент сам видит свой адрес на случай, если станет хостом при миграции: SteamID для Steam,
+        /// для IP только порт (IP хост берёт из соединения). Хост проверяет его через транспорт.
+        /// </summary>
+        public readonly SessionEndpoint Successor;
 
         /// <summary>0 — новое подключение; иначе клиент восстанавливает именно эту сессию.</summary>
         public readonly ulong SessionToken;
 
-        public ConnectionPayload(int protocolVersion, int localPlayerCount, ulong playerKey, ushort hostPort, ulong sessionToken)
+        public ConnectionPayload(int protocolVersion, int localPlayerCount, ulong playerKey, SessionEndpoint successor, ulong sessionToken)
         {
             ProtocolVersion = protocolVersion;
             LocalPlayerCount = localPlayerCount;
             PlayerKey = playerKey;
-            HostPort = hostPort;
+            Successor = successor;
             SessionToken = sessionToken;
         }
 
@@ -35,9 +40,11 @@ namespace TinyTumble.Networking.Session
             WriteInt(bytes, 0, ProtocolVersion);
             bytes[4] = (byte)LocalPlayerCount;
             WriteULong(bytes, 5, PlayerKey);
-            bytes[13] = (byte)HostPort;
-            bytes[14] = (byte)(HostPort >> 8);
-            WriteULong(bytes, 15, SessionToken);
+            bytes[13] = (byte)Successor.Kind;
+            WriteULong(bytes, 14, Successor.Address);
+            bytes[22] = (byte)Successor.Port;
+            bytes[23] = (byte)(Successor.Port >> 8);
+            WriteULong(bytes, 24, SessionToken);
             return bytes;
         }
 
@@ -50,9 +57,21 @@ namespace TinyTumble.Networking.Session
             }
 
             int version = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
-            ushort port = (ushort)(bytes[13] | (bytes[14] << 8));
-            payload = new ConnectionPayload(version, bytes[4], BitConverter.ToUInt64(bytes, 5), port, BitConverter.ToUInt64(bytes, 15));
+            ushort port = (ushort)(bytes[22] | (bytes[23] << 8));
+            SessionEndpoint successor = SessionEndpoint.FromRaw(bytes[13], ReadULong(bytes, 14), port);
+            payload = new ConnectionPayload(version, bytes[4], ReadULong(bytes, 5), successor, ReadULong(bytes, 24));
             return true;
+        }
+
+        private static ulong ReadULong(byte[] bytes, int offset)
+        {
+            ulong value = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                value |= (ulong)bytes[offset + i] << (8 * i);
+            }
+
+            return value;
         }
 
         private static void WriteInt(byte[] bytes, int offset, int value)

@@ -528,7 +528,7 @@ namespace TinyTumble.Networking.Lobby
             }
 
             _approved.Remove(clientId);
-            SessionEndpoint successor = _transport.GetSuccessorEndpoint(clientId, payload.HostPort);
+            SessionEndpoint successor = _transport.GetSuccessorEndpoint(clientId, payload.Successor);
             if (!successor.IsValid)
             {
                 _log.Warning(LogTag, $"Client {clientId} is unreachable for the others and is left out of the migration plan.");

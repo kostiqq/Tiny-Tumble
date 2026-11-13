@@ -168,10 +168,14 @@ namespace TinyTumble.Networking.Session
                 return false;
             }
 
+            // По IP короткие попытки: хост-преемник ещё может не слушать порт, и UTP быстро получает отказ.
+            // Через Steam соединение ищет маршрут через ретрансляцию и само повторяет попытки, поэтому одна
+            // попытка на всё окно: обрывать её через 3 с значило бы никогда не дождаться соединения.
+            float attemptCap = host.Kind == EndpointKind.Steam ? window : ConnectAttemptTimeout;
             float deadline = Time.realtimeSinceStartup + window;
             while (Time.realtimeSinceStartup < deadline)
             {
-                float attempt = Mathf.Min(ConnectAttemptTimeout, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
+                float attempt = Mathf.Min(attemptCap, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
                 SessionStartResult result = await _session.ConnectAsync(host, attempt, sessionToken, token);
                 if (result.Success)
                 {

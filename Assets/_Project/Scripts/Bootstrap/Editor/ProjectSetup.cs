@@ -187,6 +187,25 @@ namespace TinyTumble.Bootstrap.Editor
             }
         }
 
+        /// <summary>
+        /// Пересоздаёт только сцену лобби, не трогая префабы и остальные сцены. batchmode:
+        /// -executeMethod TinyTumble.Bootstrap.Editor.ProjectSetup.RunLobbySceneBatch
+        /// </summary>
+        public static void RunLobbySceneBatch()
+        {
+            try
+            {
+                SetupLobbyScene();
+                AssetDatabase.SaveAssets();
+                EditorApplication.Exit(0);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                EditorApplication.Exit(1);
+            }
+        }
+
         // ---------- Ассеты ----------
 
         private static T EnsureAsset<T>(string path) where T : ScriptableObject
@@ -749,6 +768,16 @@ namespace TinyTumble.Bootstrap.Editor
 
             CreateFlowButton(ui.transform, ButtonNames.Leave, "Выйти", GameState.MainMenu, new Vector2(280f, 200f));
             AddRoleVisibility(ui, new[] { start.gameObject }, new[] { ready.gameObject });
+
+            // «Пригласить» над остальными кнопками; видна только в сессии через Steam (прячет сама).
+            Button invite = CreateButton(ui.transform, ButtonNames.Invite, "Пригласить");
+            SetRect((RectTransform)invite.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), new Vector2(0f, 330f));
+            var group = invite.gameObject.AddComponent<CanvasGroup>();
+            var inviteButton = invite.gameObject.AddComponent<LobbyInviteButton>();
+            serialized = new SerializedObject(inviteButton);
+            serialized.FindProperty("_button").objectReferenceValue = invite;
+            serialized.FindProperty("_group").objectReferenceValue = group;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
 
             CreateScope<LobbyLifetimeScope>(ui);
             EditorSceneManager.SaveScene(scene);

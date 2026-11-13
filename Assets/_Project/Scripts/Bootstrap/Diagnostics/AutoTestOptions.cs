@@ -14,7 +14,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
     ///   -tt-bots 1                    сколько ботов в матче (хост); по умолчанию — из MatchConfig.
     ///                                 Выпавшие в автотесте всегда возрождаются: бот дерётся всерьёз, а тест проверяет сеть,
     ///                                 и исход драки не должен досрочно заканчивать матч
-    ///   -tt-scenario full|hostleave|hostcrash|clientdrop
+    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost
     ///       full       — лобби → матч → итоги → лобби, проверка движения своего и чужого кубика;
     ///       hostleave  — хост выходит в меню посреди матча, клиент становится новым хостом;
     ///       hostcrash  — процесс хоста убит посреди матча; первый по плану клиент становится хостом, остальные к нему переходят;
@@ -108,5 +108,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
         HostLeave,
         HostCrash,
         ClientDrop,
+
+        /// <summary>Только хост, нужен запущенный Steam: хост через Steam, лобби для приглашений открылось и закрылось.</summary>
+        SteamHost,
     }
 }

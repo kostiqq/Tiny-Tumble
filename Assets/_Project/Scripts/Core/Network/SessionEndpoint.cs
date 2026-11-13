@@ -25,6 +25,8 @@ namespace TinyTumble.Core.Network
     {
         public const uint LoopbackIpv4 = 0x7F000001;
 
+        private const string SteamPrefix = "steam:";
+
         public readonly EndpointKind Kind;
 
         /// <summary>Ip — IPv4 в младших 32 битах (первый октет старший); Steam — SteamID.</summary>
@@ -76,8 +78,8 @@ namespace TinyTumble.Core.Network
         }
 
         /// <summary>
-        /// Адрес, введённый человеком: "1.2.3.4", "1.2.3.4:7778", "localhost". Без порта — порт 0 (по умолчанию).
-        /// Имена хостов не резолвим: UTP принимает только IP.
+        /// Адрес, введённый человеком: "1.2.3.4", "1.2.3.4:7778", "localhost" или "steam:76561198000000000".
+        /// Без порта — порт 0 (по умолчанию). Имена хостов не резолвим: UTP принимает только IP.
         /// </summary>
         public static bool TryParse(string text, out SessionEndpoint endpoint)
         {
@@ -88,6 +90,18 @@ namespace TinyTumble.Core.Network
             }
 
             text = text.Trim();
+            if (text.StartsWith(SteamPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                if (!ulong.TryParse(text.Substring(SteamPrefix.Length), System.Globalization.NumberStyles.None,
+                        System.Globalization.CultureInfo.InvariantCulture, out ulong steamId) || steamId == 0)
+                {
+                    return false;
+                }
+
+                endpoint = Steam(steamId);
+                return true;
+            }
+
             string host = text;
             ushort port = 0;
             int colon = text.LastIndexOf(':');
@@ -167,7 +181,7 @@ namespace TinyTumble.Core.Network
                 case EndpointKind.Ip:
                     return Port != 0 ? Ipv4ToText(Ipv4) + ":" + Port.ToString() : Ipv4ToText(Ipv4);
                 case EndpointKind.Steam:
-                    return "steam:" + Address.ToString();
+                    return SteamPrefix + Address.ToString();
                 default:
                     return "none";
             }

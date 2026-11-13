@@ -4,6 +4,8 @@ using TinyTumble.Core.Network;
 using TinyTumble.Networking.Debugging;
 using TinyTumble.Networking.Lobby;
 using TinyTumble.Networking.Session;
+using TinyTumble.Networking.Steam;
+using TinyTumble.Networking.Transport;
 
 namespace TinyTumble.Tests
 {
@@ -13,24 +15,39 @@ namespace TinyTumble.Tests
 
         private const ulong Token = 77;
         private const ulong Key = 0xABCDEF0123456789;
+        private const ulong SteamId = 76561198000000042;
+
+        private static readonly SessionEndpoint IpSuccessor = SessionEndpoint.Ip(0, 7777);
 
         [Test]
         public void Payload_RoundTrips()
         {
-            byte[] bytes = new ConnectionPayload(Version, 2, Key, 7779, Token).ToBytes();
+            byte[] bytes = new ConnectionPayload(Version, 2, Key, SessionEndpoint.Ip(0, 7779), Token).ToBytes();
 
             Assert.IsTrue(ConnectionPayload.TryParse(bytes, out ConnectionPayload parsed));
             Assert.AreEqual(Version, parsed.ProtocolVersion);
             Assert.AreEqual(2, parsed.LocalPlayerCount);
             Assert.AreEqual(Key, parsed.PlayerKey);
-            Assert.AreEqual(7779, parsed.HostPort);
+            Assert.AreEqual(SessionEndpoint.Ip(0, 7779), parsed.Successor);
             Assert.AreEqual(Token, parsed.SessionToken);
+        }
+
+        [Test]
+        public void Payload_CarriesSteamSuccessor()
+        {
+            byte[] bytes = new ConnectionPayload(Version, 1, Key, SessionEndpoint.Steam(SteamId), 0).ToBytes();
+
+            Assert.IsTrue(ConnectionPayload.TryParse(bytes, out ConnectionPayload parsed));
+            Assert.AreEqual(EndpointKind.Steam, parsed.Successor.Kind);
+            Assert.AreEqual(SteamId, parsed.Successor.Address);
+            Assert.AreEqual(Key, parsed.PlayerKey, "Fields after the successor are not shifted.");
+            Assert.AreEqual(0UL, parsed.SessionToken);
         }
 
         [Test]
         public void Admission_AcceptsMatchingClient()
         {
-            Assert.AreEqual(DisconnectReasons.None, Evaluate(new ConnectionPayload(Version, 2, Key, 7777, 0), freeSlots: 2));
+            Assert.AreEqual(DisconnectReasons.None, Evaluate(new ConnectionPayload(Version, 2, Key, IpSuccessor, 0), freeSlots: 2));
         }
 
         [TestCase(null)]
@@ -45,25 +62,25 @@ namespace TinyTumble.Tests
         [Test]
         public void Admission_RejectsOtherVersion()
         {
-            Assert.AreEqual(DisconnectReasons.VersionMismatch, Evaluate(new ConnectionPayload(Version + 1, 1, Key, 7777, 0)));
+            Assert.AreEqual(DisconnectReasons.VersionMismatch, Evaluate(new ConnectionPayload(Version + 1, 1, Key, IpSuccessor, 0)));
         }
 
         [Test]
         public void Admission_RejectsDuringMatch()
         {
-            Assert.AreEqual(DisconnectReasons.MatchInProgress, Evaluate(new ConnectionPayload(Version, 1, Key, 7777, 0), accepting: false));
+            Assert.AreEqual(DisconnectReasons.MatchInProgress, Evaluate(new ConnectionPayload(Version, 1, Key, IpSuccessor, 0), accepting: false));
         }
 
         [Test]
         public void Admission_RejectsWhenNotEnoughSlots()
         {
-            Assert.AreEqual(DisconnectReasons.LobbyFull, Evaluate(new ConnectionPayload(Version, 3, Key, 7777, 0), freeSlots: 2));
+            Assert.AreEqual(DisconnectReasons.LobbyFull, Evaluate(new ConnectionPayload(Version, 3, Key, IpSuccessor, 0), freeSlots: 2));
         }
 
         [Test]
         public void Admission_ClientWithoutPlayers_StillNeedsOneSlot()
         {
-            var payload = new ConnectionPayload(Version, 0, Key, 7777, 0);
+            var payload = new ConnectionPayload(Version, 0, Key, IpSuccessor, 0);
             Assert.AreEqual(DisconnectReasons.LobbyFull, Evaluate(payload, freeSlots: 0));
             Assert.AreEqual(DisconnectReasons.None, Evaluate(payload, freeSlots: 1));
         }
@@ -71,14 +88,14 @@ namespace TinyTumble.Tests
         [Test]
         public void Admission_ReturningPlayer_GetsInDuringMatchAndWhenFull()
         {
-            var payload = new ConnectionPayload(Version, 1, Key, 7777, Token);
+            var payload = new ConnectionPayload(Version, 1, Key, IpSuccessor, Token);
             Assert.AreEqual(DisconnectReasons.None, Evaluate(payload, freeSlots: 0, accepting: false, reserved: true));
         }
 
         [Test]
         public void Admission_RejectsClientLookingForAnotherSession()
         {
-            var payload = new ConnectionPayload(Version, 1, Key, 7777, Token + 1);
+            var payload = new ConnectionPayload(Version, 1, Key, IpSuccessor, Token + 1);
             Assert.AreEqual(DisconnectReasons.SessionMismatch, Evaluate(payload, reserved: true));
         }
 
@@ -132,6 +149,50 @@ namespace TinyTumble.Tests
             Assert.IsFalse(SessionEndpoint.Steam(0).IsValid, "SteamID 0 is not a host.");
             Assert.AreEqual(SessionEndpoint.Ip(SessionEndpoint.LoopbackIpv4, 7777),
                 SessionEndpoint.FromRaw((byte)EndpointKind.Ip, SessionEndpoint.LoopbackIpv4, 7777));
+        }
+
+        [Test]
+        public void Address_ParsesSteamId()
+        {
+            Assert.IsTrue(SessionEndpoint.TryParse(" steam:76561198000000042 ", out SessionEndpoint endpoint));
+            Assert.AreEqual(SessionEndpoint.Steam(SteamId), endpoint);
+            Assert.AreEqual("steam:76561198000000042", endpoint.ToString());
+        }
+
+        [TestCase("steam:")]
+        [TestCase("steam:0")]
+        [TestCase("steam:-5")]
+        [TestCase("steam:abc")]
+        public void Address_RejectsBadSteamId(string text)
+        {
+            Assert.IsFalse(SessionEndpoint.TryParse(text, out _));
+        }
+
+        [Test]
+        public void ConnectLobby_ParsesSteamLaunchArgument()
+        {
+            Assert.IsTrue(SteamInvites.TryParseConnectLobby(new[] { "game.exe", "+connect_lobby", "109775241021923456" }, out ulong lobby));
+            Assert.AreEqual(109775241021923456UL, lobby);
+
+            Assert.IsFalse(SteamInvites.TryParseConnectLobby(new[] { "game.exe" }, out _));
+            Assert.IsFalse(SteamInvites.TryParseConnectLobby(new[] { "game.exe", "+connect_lobby" }, out _), "No id after the key.");
+            Assert.IsFalse(SteamInvites.TryParseConnectLobby(new[] { "+connect_lobby", "0" }, out _));
+            Assert.IsFalse(SteamInvites.TryParseConnectLobby(null, out _));
+        }
+
+        [TestCase("auto", HostTransportPreference.Auto)]
+        [TestCase(" IP ", HostTransportPreference.Ip)]
+        [TestCase("steam", HostTransportPreference.Steam)]
+        public void HostPreference_Parses(string text, HostTransportPreference expected)
+        {
+            Assert.IsTrue(NetworkDebugCommands.TryParseHostPreference(text, out HostTransportPreference preference));
+            Assert.AreEqual(expected, preference);
+        }
+
+        [Test]
+        public void HostPreference_RejectsUnknown()
+        {
+            Assert.IsFalse(NetworkDebugCommands.TryParseHostPreference("relay", out _));
         }
 
         [TestCase("")]

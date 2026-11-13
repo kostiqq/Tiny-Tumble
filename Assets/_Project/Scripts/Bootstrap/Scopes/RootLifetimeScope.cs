@@ -23,6 +23,7 @@ using TinyTumble.Networking.Debugging;
 using TinyTumble.Networking.Flow;
 using TinyTumble.Networking.Lobby;
 using TinyTumble.Networking.Session;
+using TinyTumble.Networking.Steam;
 using TinyTumble.Networking.Transport;
 using TinyTumble.Networking.Spawning;
 using TinyTumble.UI.Loading;
@@ -95,8 +96,11 @@ namespace TinyTumble.Bootstrap.Scopes
         private void RegisterNetworking(IContainerBuilder builder)
         {
             builder.Register<NetworkRuntime>(Lifetime.Singleton).WithParameter(_networkManagerPrefab);
-            // Пока единственный транспорт — прямой IP; Steam и Relay выберутся здесь же.
-            builder.Register<DirectIpTransport>(Lifetime.Singleton).As<ISessionTransport>();
+            // Steam: запуск API, транспорт NGO по SteamID и приглашения. Без запущенного Steam всё идёт по IP.
+            builder.RegisterEntryPoint<SteamService>().AsSelf();
+            builder.Register<DirectIpTransport>(Lifetime.Singleton);
+            builder.Register<SteamSessionTransport>(Lifetime.Singleton);
+            builder.Register<SessionTransports>(Lifetime.Singleton).AsSelf().As<ISessionTransport>();
             builder.Register<NetworkObjectResolver>(Lifetime.Singleton);
             // Пока корень жив, сетевые объекты без своего скоупа (объект сессии) внедряются им.
             builder.RegisterEntryPoint<NetworkResolverScope>();
@@ -107,6 +111,7 @@ namespace TinyTumble.Bootstrap.Scopes
             builder.RegisterEntryPoint<SessionLobby>().AsSelf();
             builder.Register<NetworkSession>(Lifetime.Singleton).AsSelf().As<INetworkSession>();
             builder.RegisterEntryPoint<SessionRecovery>();
+            builder.RegisterEntryPoint<SteamInvites>(); // ISessionInvites и ITickable — через реализованные интерфейсы.
             builder.RegisterEntryPoint<NetworkGameFlow>(); // IGameFlow и IInitializable — через реализованные интерфейсы.
             builder.Register<SessionLauncher>(Lifetime.Singleton).As<ISessionLauncher>();
             builder.RegisterEntryPoint<NetworkDebugCommands>();

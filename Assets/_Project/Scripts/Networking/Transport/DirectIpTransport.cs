@@ -21,17 +21,24 @@ namespace TinyTumble.Networking.Transport
             _runtime = runtime;
         }
 
-        public EndpointKind HostKind => EndpointKind.Ip;
+        public EndpointKind PreferredHostKind => EndpointKind.Ip;
 
         public bool Supports(EndpointKind kind)
         {
             return kind == EndpointKind.Ip;
         }
 
-        public void ConfigureHost(ushort hostPort)
+        public bool TryConfigureHost(EndpointKind kind, ushort hostPort)
         {
+            if (kind != EndpointKind.Ip || hostPort == 0)
+            {
+                return false;
+            }
+
+            Activate();
             // Слушаем все интерфейсы: к хосту можно подключиться и из локальной сети.
             _runtime.Transport.SetConnectionData(LoopbackAddress, hostPort, ListenAllAddress);
+            return true;
         }
 
         public bool TryConfigureClient(in SessionEndpoint host)
@@ -41,6 +48,7 @@ namespace TinyTumble.Networking.Transport
                 return false;
             }
 
+            Activate();
             _runtime.Transport.SetConnectionData(SessionEndpoint.Ipv4ToText(host.Ipv4), host.Port);
             return true;
         }
@@ -57,9 +65,15 @@ namespace TinyTumble.Networking.Transport
             transport.MaxConnectAttempts = Mathf.Max(1, Mathf.CeilToInt(connectTimeout * 1000f / ConnectAttemptIntervalMs));
         }
 
-        public SessionEndpoint GetSuccessorEndpoint(ulong clientId, ushort announcedHostPort)
+        /// <summary>Свой внешний IP клиент не знает: сообщает только порт, адрес хост видит сам.</summary>
+        public SessionEndpoint GetLocalSuccessor(ushort hostPort)
         {
-            if (announcedHostPort == 0)
+            return SessionEndpoint.Ip(0, hostPort);
+        }
+
+        public SessionEndpoint GetSuccessorEndpoint(ulong clientId, in SessionEndpoint announced)
+        {
+            if (announced.Kind != EndpointKind.Ip || announced.Port == 0)
             {
                 return SessionEndpoint.None;
             }
@@ -68,7 +82,12 @@ namespace TinyTumble.Networking.Transport
             string endpoint = _runtime.Transport.GetEndpoint(clientId).ToString();
             int colon = endpoint.LastIndexOf(':');
             string host = colon > 0 ? endpoint.Substring(0, colon) : endpoint;
-            return SessionEndpoint.TryParseIpv4(host, out uint ipv4) ? SessionEndpoint.Ip(ipv4, announcedHostPort) : SessionEndpoint.None;
+            return SessionEndpoint.TryParseIpv4(host, out uint ipv4) ? SessionEndpoint.Ip(ipv4, announced.Port) : SessionEndpoint.None;
+        }
+
+        private void Activate()
+        {
+            _runtime.Manager.NetworkConfig.NetworkTransport = _runtime.Transport;
         }
     }
 }

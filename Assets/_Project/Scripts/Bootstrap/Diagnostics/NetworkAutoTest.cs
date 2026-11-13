@@ -15,6 +15,8 @@ using TinyTumble.Gameplay.Characters;
 using TinyTumble.Gameplay.Match;
 using TinyTumble.Networking.Debugging;
 using TinyTumble.Networking.Session;
+using TinyTumble.Networking.Transport;
+using TinyTumble.UI.Lobby;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.LowLevel;
@@ -54,6 +56,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
         private readonly IPublisher<MatchEnded> _matchEnded;
         private readonly NetworkSimulatorControl _simulator;
         private readonly MatchSetup _matchSetup;
+        private readonly SessionTransports _transports;
+        private readonly ISessionInvites _invites;
         private readonly IGameLog _log;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<ulong> _clientsBuffer = new List<ulong>();
@@ -70,6 +74,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
             IPublisher<MatchEnded> matchEnded,
             NetworkSimulatorControl simulator,
             MatchSetup matchSetup,
+            SessionTransports transports,
+            ISessionInvites invites,
             IGameLog log)
         {
             _options = options;
@@ -82,6 +88,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
             _matchEnded = matchEnded;
             _simulator = simulator;
             _matchSetup = matchSetup;
+            _transports = transports;
+            _invites = invites;
             _log = log;
         }
 
@@ -145,6 +153,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
                 _session.HostPort = _options.Port;
             }
 
+            // Копии игры на одной машине сидят под одним аккаунтом Steam и через Steam друг к другу не подключатся.
+            _transports.HostPreference = _options.Scenario == AutoTestScenario.SteamHost ? HostTransportPreference.Steam : HostTransportPreference.Ip;
+
             if (_options.Bots >= 0)
             {
                 _matchSetup.BotCount = _options.Bots;
@@ -168,6 +179,40 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         // ---------- Хост ----------
 
+        private static bool IsInviteButtonShown()
+        {
+            var button = Object.FindAnyObjectByType<LobbyInviteButton>();
+            return button != null && button.IsShown;
+        }
+
+        private async UniTask<string> RunSteamHostAsync(CancellationToken token)
+        {
+            if (_session.TransportKind != EndpointKind.Steam)
+            {
+                return "hosted over " + _session.TransportKind + ", expected Steam";
+            }
+
+            Step("hosting over Steam, waiting for the invite lobby");
+            if (!await WaitUntil(() => _invites.CanInvite, token))
+            {
+                return "Steam lobby for invites was not created";
+            }
+
+            if (!await WaitUntil(IsInviteButtonShown, token))
+            {
+                return "the lobby has no visible 'Invite' button while the Steam lobby is open";
+            }
+
+            Step("invite lobby is open and the 'Invite' button is shown, leaving to the main menu");
+            await _flow.GoToAsync(GameState.MainMenu);
+            if (!await WaitUntil(() => !_invites.CanInvite, token))
+            {
+                return "Steam lobby was not left after the session ended";
+            }
+
+            return null;
+        }
+
         private async UniTask<string> RunHostAsync(CancellationToken token)
         {
             await WaitForState(GameState.MainMenu, token);
@@ -178,7 +223,17 @@ namespace TinyTumble.Bootstrap.Diagnostics
             }
 
             await WaitForState(GameState.Lobby, token);
+            if (_options.Scenario == AutoTestScenario.SteamHost)
+            {
+                return await RunSteamHostAsync(token);
+            }
+
             _localPlayers.TryJoinDefault();
+            if (IsInviteButtonShown())
+            {
+                return "the 'Invite' button is shown in a session over IP";
+            }
+
             Step("lobby open, waiting for clients");
 
             if (!await WaitUntil(() => CountReadyRemoteClients() >= _options.Clients, token))
