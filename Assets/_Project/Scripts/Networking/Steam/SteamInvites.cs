@@ -8,6 +8,7 @@ using TinyTumble.Core.Flow;
 using TinyTumble.Core.Logging;
 using TinyTumble.Core.Network;
 using TinyTumble.Networking.Lobby;
+using TinyTumble.Networking.Party;
 using TinyTumble.Networking.Session;
 using VContainer.Unity;
 
@@ -20,6 +21,8 @@ namespace TinyTumble.Networking.Steam
     /// по-прежнему ведёт NGO-сессия.
     /// После миграции владельцем лобби Steam становится случайный участник; он передаёт владение новому
     /// NGO-хосту, а тот записывает в данные лобби свой SteamID.
+    /// Лидер пати, принявший приглашение посреди своей сессии, уводит туда всю пати (<see cref="IParty.MoveTo"/>).
+    /// Остальные участники при переезде выходят из старого лобби Steam: оно принадлежало старой сессии.
     /// </summary>
     public sealed class SteamInvites : ISessionInvites, ITickable, IDisposable
     {
@@ -33,6 +36,7 @@ namespace TinyTumble.Networking.Steam
         private readonly ISessionLauncher _launcher;
         private readonly IGameFlow _flow;
         private readonly SessionConfig _config;
+        private readonly PartyService _party;
         private readonly IGameLog _log;
 
         private Callback<GameLobbyJoinRequested_t> _joinRequested;
@@ -46,12 +50,16 @@ namespace TinyTumble.Networking.Steam
         private CSteamID _lobby = CSteamID.Nil;
         private CSteamID _pendingLobby = CSteamID.Nil;
 
+        // Лобби, в которое мы вошли, чтобы увести туда пати: при переезде из него не выходим.
+        private bool _lobbyIsMoveTarget;
+
         public SteamInvites(
             SteamService steam,
             NetworkSession session,
             ISessionLauncher launcher,
             IGameFlow flow,
             SessionConfig config,
+            PartyService party,
             IGameLog log)
         {
             _steam = steam;
@@ -59,6 +67,7 @@ namespace TinyTumble.Networking.Steam
             _launcher = launcher;
             _flow = flow;
             _config = config;
+            _party = party;
             _log = log;
         }
 
@@ -98,6 +107,12 @@ namespace TinyTumble.Networking.Steam
             {
                 _roleSubscription.Dispose();
                 _roleSubscription = null;
+            }
+
+            if (_setUp)
+            {
+                _party.MoveStarted -= OnPartyMoveStarted;
+                _party.MoveFinished -= OnPartyMoveFinished;
             }
 
             if (_steam.IsReady)
@@ -143,6 +158,8 @@ namespace TinyTumble.Networking.Steam
             _lobbyChanged = Callback<LobbyChatUpdate_t>.Create(OnLobbyChanged);
             _lobbyCreated = CallResult<LobbyCreated_t>.Create(OnLobbyCreated);
             _roleSubscription = _session.Role.Subscribe(OnRoleChanged);
+            _party.MoveStarted += OnPartyMoveStarted;
+            _party.MoveFinished += OnPartyMoveFinished;
 
             if (TryParseConnectLobby(Environment.GetCommandLineArgs(), out ulong lobbyId))
             {
@@ -158,15 +175,46 @@ namespace TinyTumble.Networking.Steam
                 return;
             }
 
-            if (role == SessionRole.Host && !_lobby.IsValid() && !_creating)
+            if (role == SessionRole.Host && !_lobby.IsValid())
             {
-                _creating = true;
-                _lobbyCreated.Set(SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, SlotTable.Capacity));
+                CreateLobby();
                 return;
             }
 
             // Мы стали хостом после миграции или клиентом нового хоста: поправить владельца и данные лобби.
             SyncOwnership();
+        }
+
+        private void CreateLobby()
+        {
+            if (_creating)
+            {
+                return;
+            }
+
+            _creating = true;
+            _lobbyCreated.Set(SteamMatchmaking.CreateLobby(ELobbyType.k_ELobbyTypeFriendsOnly, SlotTable.Capacity));
+        }
+
+        private void OnPartyMoveStarted()
+        {
+            if (!_lobbyIsMoveTarget)
+            {
+                LeaveLobby();
+            }
+        }
+
+        private void OnPartyMoveFinished()
+        {
+            _lobbyIsMoveTarget = false;
+
+            // Переехать не вышло, и пати собралась у нас: лобби, в которое мы входили, — чужое, нужно своё.
+            if (_session.Role.CurrentValue == SessionRole.Host && _session.TransportKind == EndpointKind.Steam && _lobby.IsValid()
+                && SteamMatchmaking.GetLobbyOwner(_lobby).m_SteamID != _steam.LocalSteamId)
+            {
+                LeaveLobby();
+                CreateLobby();
+            }
         }
 
         private void OnLobbyCreated(LobbyCreated_t result, bool ioFailure)
@@ -193,10 +241,11 @@ namespace TinyTumble.Networking.Steam
 
         private void OnJoinRequested(GameLobbyJoinRequested_t request)
         {
-            if (_session.Role.CurrentValue != SessionRole.None || _launcher.IsBusy || _session.IsRecovering)
+            bool inSession = _session.Role.CurrentValue != SessionRole.None || _session.IsRecovering;
+            if (_launcher.IsBusy || (inSession && !_party.CanMove))
             {
-                // Переход из одной сессии в другую по приглашению пока не поддерживаем: сначала выйти в меню.
-                _log.Info(LogTag, "Invite ignored: already in a session. Leave to the main menu and accept it again.");
+                // Участник пати (не лидер) в сессии по приглашению не уходит: пати держится вместе.
+                _log.Info(LogTag, "Invite ignored: only the party leader can take the party elsewhere. Leave to the main menu to go alone.");
                 return;
             }
 
@@ -205,12 +254,19 @@ namespace TinyTumble.Networking.Steam
 
         private void TryJoinPendingLobby()
         {
-            if (!_pendingLobby.IsValid() || _joining || _launcher.IsBusy || _flow.IsTransitioning
-                || _flow.Current != GameState.MainMenu || _session.Role.CurrentValue != SessionRole.None)
+            if (!_pendingLobby.IsValid() || _joining || _launcher.IsBusy || _flow.IsTransitioning)
             {
                 return;
             }
 
+            bool fromMenu = _flow.Current == GameState.MainMenu && _session.Role.CurrentValue == SessionRole.None;
+            if (!fromMenu && !_party.CanMove)
+            {
+                return;
+            }
+
+            // Лидер уводит пати: лобби старой сессии ему больше не нужно.
+            LeaveLobby();
             _joining = true;
             _log.Info(LogTag, $"Joining Steam lobby {_pendingLobby.m_SteamID}...");
             SteamMatchmaking.JoinLobby(_pendingLobby);
@@ -254,6 +310,20 @@ namespace TinyTumble.Networking.Steam
                 {
                     _log.Warning(LogTag, "The lobby does not name its host.");
                     LeaveLobby();
+                    return;
+                }
+
+                if (_session.Role.CurrentValue != SessionRole.None)
+                {
+                    // Мы лидер пати посреди своей сессии: переезжаем к хосту лобби всей пати.
+                    _lobbyIsMoveTarget = true;
+                    if (!_party.MoveTo(SessionEndpoint.Steam(host)))
+                    {
+                        _lobbyIsMoveTarget = false;
+                        _log.Warning(LogTag, "Could not start moving the party to the lobby host.");
+                        LeaveLobby();
+                    }
+
                     return;
                 }
 
@@ -317,7 +387,7 @@ namespace TinyTumble.Networking.Steam
         private void LeaveLobbyIfSessionEnded()
         {
             if (_lobby.IsValid() && !_joining && !_creating && _session.Role.CurrentValue == SessionRole.None
-                && !_session.IsRecovering && !_launcher.IsBusy)
+                && !_session.IsRecovering && !_launcher.IsBusy && !_party.IsMoving)
             {
                 LeaveLobby();
             }

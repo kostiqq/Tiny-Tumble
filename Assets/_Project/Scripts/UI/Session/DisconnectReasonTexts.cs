@@ -34,6 +34,8 @@ namespace TinyTumble.UI.Session
                     return "Не удалось запустить сеть. Возможно, порт занят.";
                 case DisconnectReasons.SessionMismatch:
                     return "По этому адресу уже идёт другая игра.";
+                case DisconnectReasons.PartyTooBig:
+                    return "В лобби не хватает мест на всю пати.";
                 default:
                     return reason;
             }

@@ -14,11 +14,16 @@ namespace TinyTumble.Bootstrap.Diagnostics
     ///   -tt-bots 1                    сколько ботов в матче (хост); по умолчанию — из MatchConfig.
     ///                                 Выпавшие в автотесте всегда возрождаются: бот дерётся всерьёз, а тест проверяет сеть,
     ///                                 и исход драки не должен досрочно заканчивать матч
-    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost
+    ///   -tt-party leader|member       роль клиента в сценарии partymove
+    ///   -tt-target 127.0.0.1:7777     куда лидер уводит пати в сценарии partymove
+    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost|partymove
     ///       full       — лобби → матч → итоги → лобби, проверка движения своего и чужого кубика;
     ///       hostleave  — хост выходит в меню посреди матча, клиент становится новым хостом;
     ///       hostcrash  — процесс хоста убит посреди матча; первый по плану клиент становится хостом, остальные к нему переходят;
-    ///       clientdrop — у клиента на 8 с пропадает сеть посреди матча; он возвращается, досматривает матч и попадает в лобби в свой слот.
+    ///       clientdrop — у клиента на 8 с пропадает сеть посреди матча; он возвращается, досматривает матч и попадает в лобби в свой слот;
+    ///       steamhost  — только хост, нужен Steam: хост через Steam, лобби для приглашений открылось и закрылось;
+    ///       partymove  — три копии: хост (цель), лидер пати (сначала сам хост своей пати) и участник; пати переезжает
+    ///                    к хосту и возвращается к лидеру.
     /// </summary>
     public sealed class AutoTestOptions
     {
@@ -31,6 +36,12 @@ namespace TinyTumble.Bootstrap.Diagnostics
         public float MatchDuration { get; private set; } = 6f;
         public string NetworkSimulator { get; private set; }
         public AutoTestScenario Scenario { get; private set; } = AutoTestScenario.Full;
+
+        /// <summary>partymove: этот клиент — лидер пати (хостит её и уводит), иначе участник.</summary>
+        public bool IsPartyLeader { get; private set; }
+
+        /// <summary>partymove: куда лидер уводит пати.</summary>
+        public string Target { get; private set; } = "127.0.0.1:7777";
 
         /// <summary>-1 — не задано: как в MatchConfig.</summary>
         public int Bots { get; private set; } = -1;
@@ -74,6 +85,13 @@ namespace TinyTumble.Bootstrap.Diagnostics
                 options.Bots = bots;
             }
 
+            options.IsPartyLeader = string.Equals(GetValue(args, "-tt-party"), "leader", StringComparison.OrdinalIgnoreCase);
+            string target = GetValue(args, "-tt-target");
+            if (!string.IsNullOrEmpty(target))
+            {
+                options.Target = target;
+            }
+
             string scenario = GetValue(args, "-tt-scenario");
             if (!string.IsNullOrEmpty(scenario))
             {
@@ -111,5 +129,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         /// <summary>Только хост, нужен запущенный Steam: хост через Steam, лобби для приглашений открылось и закрылось.</summary>
         SteamHost,
+
+        /// <summary>Хост + лидер пати + участник: пати переезжает к хосту целиком и возвращается к лидеру.</summary>
+        PartyMove,
     }
 }

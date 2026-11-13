@@ -22,6 +22,7 @@ using TinyTumble.Infrastructure.Scenes;
 using TinyTumble.Networking.Debugging;
 using TinyTumble.Networking.Flow;
 using TinyTumble.Networking.Lobby;
+using TinyTumble.Networking.Party;
 using TinyTumble.Networking.Session;
 using TinyTumble.Networking.Steam;
 using TinyTumble.Networking.Transport;
@@ -107,9 +108,12 @@ namespace TinyTumble.Bootstrap.Scopes
             builder.Register<NetworkPrefabRegistry>(Lifetime.Singleton);
             builder.Register<NetworkSimulatorControl>(Lifetime.Singleton);
             builder.Register<PlayerIdentity>(Lifetime.Singleton);
+            builder.Register<PartyState>(Lifetime.Singleton);
             // ITickable: истечение резерва слотов отвалившихся игроков.
             builder.RegisterEntryPoint<SessionLobby>().AsSelf();
             builder.Register<NetworkSession>(Lifetime.Singleton).AsSelf().As<INetworkSession>();
+            // Пати: переезды между сессиями. IParty и IInitializable — через реализованные интерфейсы.
+            builder.RegisterEntryPoint<PartyService>().AsSelf();
             builder.RegisterEntryPoint<SessionRecovery>();
             builder.RegisterEntryPoint<SteamInvites>(); // ISessionInvites и ITickable — через реализованные интерфейсы.
             builder.RegisterEntryPoint<NetworkGameFlow>(); // IGameFlow и IInitializable — через реализованные интерфейсы.

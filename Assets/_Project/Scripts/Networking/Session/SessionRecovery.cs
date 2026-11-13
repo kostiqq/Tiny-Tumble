@@ -8,7 +8,7 @@ using TinyTumble.Core.Logging;
 using TinyTumble.Core.Network;
 using TinyTumble.Core.Scenes;
 using TinyTumble.Networking.Lobby;
-using UnityEngine;
+using TinyTumble.Networking.Party;
 using VContainer.Unity;
 
 namespace TinyTumble.Networking.Session
@@ -24,12 +24,12 @@ namespace TinyTumble.Networking.Session
     public sealed class SessionRecovery : IInitializable, IDisposable
     {
         private const string LogTag = "Net";
-        private const float ConnectAttemptTimeout = 3f;
-        private const float RetryDelay = 0.5f;
 
         private readonly NetworkSession _session;
         private readonly SessionLobby _lobby;
         private readonly PlayerIdentity _identity;
+        private readonly PartyState _party;
+        private readonly PartyService _partyService;
         private readonly IGameFlow _flow;
         private readonly ILoadingScreen _loadingScreen;
         private readonly SessionConfig _config;
@@ -40,6 +40,8 @@ namespace TinyTumble.Networking.Session
             NetworkSession session,
             SessionLobby lobby,
             PlayerIdentity identity,
+            PartyState party,
+            PartyService partyService,
             IGameFlow flow,
             ILoadingScreen loadingScreen,
             SessionConfig config,
@@ -48,6 +50,8 @@ namespace TinyTumble.Networking.Session
             _session = session;
             _lobby = lobby;
             _identity = identity;
+            _party = party;
+            _partyService = partyService;
             _flow = flow;
             _loadingScreen = loadingScreen;
             _config = config;
@@ -69,6 +73,12 @@ namespace TinyTumble.Networking.Session
 
         private void OnDropped(DropInfo drop)
         {
+            // Пати уезжает: старый хост пропал, потому что мы сами уходим. Подключение ведёт PartyService.
+            if (_partyService.IsMoving)
+            {
+                return;
+            }
+
             Cancel();
             _recovery = new CancellationTokenSource();
             RecoverAsync(drop, _recovery.Token).Forget();
@@ -168,36 +178,14 @@ namespace TinyTumble.Networking.Session
                 return false;
             }
 
-            // По IP короткие попытки: хост-преемник ещё может не слушать порт, и UTP быстро получает отказ.
-            // Через Steam соединение ищет маршрут через ретрансляцию и само повторяет попытки, поэтому одна
-            // попытка на всё окно: обрывать её через 3 с значило бы никогда не дождаться соединения.
-            float attemptCap = host.Kind == EndpointKind.Steam ? window : ConnectAttemptTimeout;
-            float deadline = Time.realtimeSinceStartup + window;
-            while (Time.realtimeSinceStartup < deadline)
+            // Возвращаемся со своей пати: если слот за нами уже не держат, хост примет нас как пришедшую пати.
+            SessionStartResult result = await _session.ConnectWithRetriesAsync(host, window, sessionToken, _party.Ticket(0), token);
+            if (!result.Success && DisconnectReasons.IsRejection(result.Reason))
             {
-                float attempt = Mathf.Min(attemptCap, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
-                SessionStartResult result = await _session.ConnectAsync(host, attempt, sessionToken, token);
-                if (result.Success)
-                {
-                    return true;
-                }
-
-                if (DisconnectReasons.IsRejection(result.Reason))
-                {
-                    _log.Info(LogTag, $"{host} refused us: {result.Reason}.");
-                    return false;
-                }
-
-                // Транспорт этот адрес не понимает: повторять бесполезно.
-                if (result.Reason == DisconnectReasons.InvalidAddress)
-                {
-                    return false;
-                }
-
-                await UniTask.Delay(TimeSpan.FromSeconds(RetryDelay), ignoreTimeScale: true, cancellationToken: token);
+                _log.Info(LogTag, $"{host} refused us: {result.Reason}.");
             }
 
-            return false;
+            return result.Success;
         }
 
         /// <summary>

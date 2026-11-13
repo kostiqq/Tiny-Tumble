@@ -4,6 +4,7 @@ using Cysharp.Threading.Tasks;
 using TinyTumble.Core.Flow;
 using TinyTumble.Core.Input;
 using TinyTumble.Core.Network;
+using TinyTumble.Networking.Party;
 
 namespace TinyTumble.Networking.Flow
 {
@@ -12,13 +13,15 @@ namespace TinyTumble.Networking.Flow
         private readonly INetworkSession _session;
         private readonly IGameFlow _flow;
         private readonly ILocalPlayers _localPlayers;
+        private readonly PartyState _party;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
 
-        public SessionLauncher(INetworkSession session, IGameFlow flow, ILocalPlayers localPlayers)
+        public SessionLauncher(INetworkSession session, IGameFlow flow, ILocalPlayers localPlayers, PartyState party)
         {
             _session = session;
             _flow = flow;
             _localPlayers = localPlayers;
+            _party = party;
         }
 
         public bool IsBusy { get; private set; }
@@ -33,6 +36,8 @@ namespace TinyTumble.Networking.Flow
             IsBusy = true;
             try
             {
+                // Новая игра из меню — новая пати, мы её лидер.
+                _party.StartNew();
                 SessionStartResult result = await _session.StartHostAsync(_lifetime.Token);
                 if (result.Success)
                 {
@@ -60,6 +65,9 @@ namespace TinyTumble.Networking.Flow
                 // Кнопку нажали мышью, а игрока ещё нет: входим с клавиатуры, чтобы хост сразу выдал слот.
                 // Геймпады присоединятся в лобби как обычно.
                 _localPlayers.TryJoinDefault();
+
+                // Пока мы сами по себе; хост запишет нас в свою пати, и мы возьмём её из своих слотов.
+                _party.StartNew();
 
                 // В лобби клиента переведёт NetworkGameFlow, как только узнает состояние хоста.
                 return await _session.StartClientAsync(host, _lifetime.Token);

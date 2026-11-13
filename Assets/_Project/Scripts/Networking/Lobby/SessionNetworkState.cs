@@ -1,5 +1,7 @@
 using System;
 using TinyTumble.Core.Flow;
+using TinyTumble.Core.Network;
+using TinyTumble.Networking.Party;
 using Unity.Netcode;
 using VContainer;
 
@@ -77,6 +79,23 @@ namespace TinyTumble.Networking.Lobby
         public void HostLeavingRpc()
         {
             _lobby.OnHostLeaving();
+        }
+
+        /// <summary>Лидер пати просит хоста увести её. SessionEndpoint живёт в Core без NGO, поэтому идут его поля.</summary>
+        [Rpc(SendTo.Server)]
+        public void RequestPartyMoveRpc(byte kind, ulong address, ushort port, RpcParams rpcParams = default)
+        {
+            _lobby.OnPartyMoveRequested(rpcParams.Receive.SenderClientId, SessionEndpoint.FromRaw(kind, address, port));
+        }
+
+        /// <summary>Хост: пати переезжает. Получают все клиенты, выполняют участники этой пати.</summary>
+        [Rpc(SendTo.NotServer)]
+        public void PartyMoveRpc(ulong partyId, ulong leaderKey, byte partySize, byte kind, ulong address, ushort port,
+            byte leaderKind, ulong leaderAddress, ushort leaderPort)
+        {
+            SessionEndpoint target = SessionEndpoint.FromRaw(kind, address, port);
+            SessionEndpoint leader = SessionEndpoint.FromRaw(leaderKind, leaderAddress, leaderPort);
+            _lobby.OnPartyMove(new PartyMove(partyId, target, leaderKey, partySize, leader));
         }
 
         [Rpc(SendTo.Server)]

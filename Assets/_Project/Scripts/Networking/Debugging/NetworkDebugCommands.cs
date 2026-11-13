@@ -16,7 +16,8 @@ using VContainer.Unity;
 namespace TinyTumble.Networking.Debugging
 {
     /// <summary>
-    /// Команды консоли для сети: net.host, net.join, net.invite, net.leave, net.status, net.sim, net.drop.
+    /// Команды консоли для сети: net.host, net.join, net.invite, net.leave, net.status, net.sim, net.drop,
+    /// net.party.move, net.party.home.
     /// </summary>
     public sealed class NetworkDebugCommands : IStartable, IDisposable
     {
@@ -33,6 +34,7 @@ namespace TinyTumble.Networking.Debugging
         private readonly NetworkSession _networkSession;
         private readonly SteamService _steam;
         private readonly ISessionInvites _invites;
+        private readonly IParty _party;
         private readonly IGameLog _log;
         private readonly List<IDisposable> _registrations = new List<IDisposable>();
         private readonly StringBuilder _builder = new StringBuilder();
@@ -48,6 +50,7 @@ namespace TinyTumble.Networking.Debugging
             NetworkSession networkSession,
             SteamService steam,
             ISessionInvites invites,
+            IParty party,
             IGameLog log)
         {
             _console = console;
@@ -60,6 +63,7 @@ namespace TinyTumble.Networking.Debugging
             _networkSession = networkSession;
             _steam = steam;
             _invites = invites;
+            _party = party;
             _log = log;
         }
 
@@ -72,6 +76,8 @@ namespace TinyTumble.Networking.Debugging
             _registrations.Add(_console.Register("net.status", "роль, игроки, симулятор", OnStatus));
             _registrations.Add(_console.Register("net.sim", "симулятор сети: net.sim <задержка мс> <джиттер мс> <потери %>; net.sim off", OnSim));
             _registrations.Add(_console.Register("net.drop", "оборвать связь в обе стороны: net.drop <секунды> (по умолчанию 8)", OnDrop));
+            _registrations.Add(_console.Register("net.party.move", "лидер уводит пати к другому хосту: net.party.move <ip[:port]> или steam:<SteamID>", OnPartyMove));
+            _registrations.Add(_console.Register("net.party.home", "лидер уводит пати из чужой сессии к себе", OnPartyHome));
         }
 
         public void Dispose()
@@ -141,6 +147,30 @@ namespace TinyTumble.Networking.Debugging
             _launcher.JoinAsync(host).Forget();
         }
 
+        private void OnPartyMove(string arguments)
+        {
+            if (string.IsNullOrWhiteSpace(arguments) || !SessionEndpoint.TryParse(arguments, out SessionEndpoint host))
+            {
+                _log.Warning(LogTag, "Usage: net.party.move <ip[:port]> or net.party.move steam:<SteamID>");
+                return;
+            }
+
+            if (!_party.MoveTo(host))
+            {
+                _log.Warning(LogTag, _party.IsLeader
+                    ? "The party cannot move now: only from the lobby of a running session."
+                    : "Only the party leader can move the party.");
+            }
+        }
+
+        private void OnPartyHome(string arguments)
+        {
+            if (!_party.Regroup())
+            {
+                _log.Warning(LogTag, "Nothing to do: only the leader of a party that is a guest in someone else's session can take it home.");
+            }
+        }
+
         private void OnLeave(string arguments)
         {
             _flow.GoToAsync(GameState.MainMenu).Forget();
@@ -153,7 +183,8 @@ namespace TinyTumble.Networking.Debugging
                 .Append(", client id: ").Append(_session.LocalClientId)
                 .Append(", host state: ").Append(_lobby.HostState)
                 .Append(", transport: ").Append(_networkSession.TransportKind)
-                .Append(", host preference: ").Append(_transports.HostPreference);
+                .Append(", host preference: ").Append(_transports.HostPreference)
+                .Append(", party: ").Append(_party.PartyId.ToString("X")).Append(_party.IsLeader ? " (leader)" : string.Empty);
 
             if (_steam.IsReady)
             {
@@ -178,7 +209,8 @@ namespace TinyTumble.Networking.Debugging
                     .Append(": client ").Append(slot.ClientId)
                     .Append(", local ").Append(slot.LocalIndex)
                     .Append(slot.IsConnected ? string.Empty : ", reserved")
-                    .Append(slot.IsReady ? ", ready" : string.Empty);
+                    .Append(slot.IsReady ? ", ready" : string.Empty)
+                    .Append(", party ").Append(slot.PartyId.ToString("X")).Append(slot.IsPartyLeader ? " (leader)" : string.Empty);
             }
 
             if (_simulator.IsEnabled)

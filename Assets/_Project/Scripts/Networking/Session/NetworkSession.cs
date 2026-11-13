@@ -23,6 +23,8 @@ namespace TinyTumble.Networking.Session
     public sealed class NetworkSession : INetworkSession, IDisposable
     {
         private const string LogTag = "Net";
+        private const float ConnectAttemptTimeout = 3f;
+        private const float RetryDelay = 0.5f;
 
         private readonly NetworkRuntime _runtime;
         private readonly ISessionTransport _transport;
@@ -105,8 +107,17 @@ namespace TinyTumble.Networking.Session
             return StartHostAsync(HostSeed.NewSession(NewSessionToken()), cancellationToken);
         }
 
-        /// <summary>Хост с заданным началом: новая игра или продолжение сессии после миграции.</summary>
-        public async UniTask<SessionStartResult> StartHostAsync(HostSeed seed, CancellationToken cancellationToken)
+        /// <summary>Новая сессия через заданный транспорт (пати собирается у лидера тем же транспортом, что и раньше).</summary>
+        public UniTask<SessionStartResult> StartHostAsync(EndpointKind kind, CancellationToken cancellationToken)
+        {
+            return StartHostAsync(HostSeed.NewSession(NewSessionToken()), cancellationToken, kind);
+        }
+
+        /// <summary>
+        /// Хост с заданным началом: новая игра или продолжение сессии после миграции.
+        /// kind None — транспорт выбирается сам: преемник берёт тот, через который шла сессия, новый хост — предпочтительный.
+        /// </summary>
+        public async UniTask<SessionStartResult> StartHostAsync(HostSeed seed, CancellationToken cancellationToken, EndpointKind kind = EndpointKind.None)
         {
             if (_role.Value != SessionRole.None || _connecting)
             {
@@ -121,7 +132,11 @@ namespace TinyTumble.Networking.Session
                 NetworkManager manager = _runtime.Manager;
                 // Преемник поднимает хост тем же транспортом, через который шла сессия: план миграции
                 // разослал остальным адрес именно этого типа.
-                EndpointKind kind = seed.HasSlots && _server.IsValid ? _server.Kind : _transport.PreferredHostKind;
+                if (kind == EndpointKind.None)
+                {
+                    kind = seed.HasSlots && _server.IsValid ? _server.Kind : _transport.PreferredHostKind;
+                }
+
                 if (!_transport.TryConfigureHost(kind, HostPort))
                 {
                     _log.Warning(LogTag, $"Cannot host over {kind}.");
@@ -129,7 +144,7 @@ namespace TinyTumble.Networking.Session
                 }
 
                 _transport.ConfigureTimeouts(_config.ConnectTimeout, _config.DisconnectTimeout);
-                manager.NetworkConfig.ConnectionData = BuildPayload(0);
+                manager.NetworkConfig.ConnectionData = BuildPayload(0, PartyTicket.JoinHostParty);
                 Subscribe();
 
                 if (!manager.StartHost())
@@ -162,15 +177,50 @@ namespace TinyTumble.Networking.Session
             }
         }
 
+        /// <summary>Подключение из меню или по приглашению: клиент вступает в пати хоста.</summary>
         public UniTask<SessionStartResult> StartClientAsync(SessionEndpoint host, CancellationToken cancellationToken)
         {
-            return ConnectAsync(host.WithDefaultPort(_config.Port), _config.ConnectTimeout, 0, cancellationToken);
+            return ConnectAsync(host.WithDefaultPort(_config.Port), _config.ConnectTimeout, 0, PartyTicket.JoinHostParty, cancellationToken);
+        }
+
+        /// <summary>
+        /// Повторяет попытки подключиться, пока не выйдет окно. Отказ хоста (сессия не та, нет мест)
+        /// и адрес, которого транспорт не понимает, прекращают попытки сразу.
+        /// </summary>
+        public async UniTask<SessionStartResult> ConnectWithRetriesAsync(SessionEndpoint host, float window, ulong sessionToken,
+            PartyTicket party, CancellationToken cancellationToken)
+        {
+            if (!host.IsValid)
+            {
+                return SessionStartResult.Fail(DisconnectReasons.InvalidAddress);
+            }
+
+            // По IP короткие попытки: хост ещё может не слушать порт, и UTP быстро получает отказ.
+            // Через Steam соединение ищет маршрут через ретрансляцию и само повторяет попытки, поэтому одна
+            // попытка на всё окно: обрывать её через 3 с значило бы никогда не дождаться соединения.
+            float attemptCap = host.Kind == EndpointKind.Steam ? window : ConnectAttemptTimeout;
+            float deadline = Time.realtimeSinceStartup + window;
+            SessionStartResult result = SessionStartResult.Fail(DisconnectReasons.ConnectFailed);
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                float attempt = Mathf.Min(attemptCap, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
+                result = await ConnectAsync(host, attempt, sessionToken, party, cancellationToken);
+                if (result.Success || DisconnectReasons.IsRejection(result.Reason) || result.Reason == DisconnectReasons.InvalidAddress)
+                {
+                    return result;
+                }
+
+                await UniTask.Delay(TimeSpan.FromSeconds(RetryDelay), ignoreTimeScale: true, cancellationToken: cancellationToken);
+            }
+
+            return result;
         }
 
         /// <summary>
         /// Подключение к хосту. sessionToken не 0 — возвращаемся в конкретную сессию (после обрыва или к преемнику).
         /// </summary>
-        public async UniTask<SessionStartResult> ConnectAsync(SessionEndpoint host, float timeout, ulong sessionToken, CancellationToken cancellationToken)
+        public async UniTask<SessionStartResult> ConnectAsync(SessionEndpoint host, float timeout, ulong sessionToken, PartyTicket party,
+            CancellationToken cancellationToken)
         {
             if (_role.Value != SessionRole.None || _connecting)
             {
@@ -194,7 +244,7 @@ namespace TinyTumble.Networking.Session
                 }
 
                 _transport.ConfigureTimeouts(timeout, _config.DisconnectTimeout);
-                manager.NetworkConfig.ConnectionData = BuildPayload(sessionToken);
+                manager.NetworkConfig.ConnectionData = BuildPayload(sessionToken, party);
                 _connectFinished = false;
                 _connectFailure = null;
                 Subscribe();
@@ -294,10 +344,10 @@ namespace TinyTumble.Networking.Session
             await _prefabs.EnsureRegisteredAsync(cancellationToken);
         }
 
-        private byte[] BuildPayload(ulong sessionToken)
+        private byte[] BuildPayload(ulong sessionToken, PartyTicket party)
         {
             SessionEndpoint successor = _transport.GetLocalSuccessor(HostPort);
-            return new ConnectionPayload(_config.ProtocolVersion, _localPlayers.Players.Count, _identity.Key, successor, sessionToken).ToBytes();
+            return new ConnectionPayload(_config.ProtocolVersion, _localPlayers.Players.Count, _identity.Key, successor, sessionToken, party).ToBytes();
         }
 
         private void Subscribe()
@@ -352,8 +402,10 @@ namespace TinyTumble.Networking.Session
             }
 
             bool valid = ConnectionPayload.TryParse(request.Payload, out ConnectionPayload payload);
+            _lobby.GetPartyHolds(valid ? payload.Party.PartyId : 0, out int heldForParty, out int heldForOthers);
             string reason = ConnectionAdmission.Evaluate(payload, valid, _config.ProtocolVersion, _lobby.SessionToken,
-                valid && _lobby.HasReservation(payload.PlayerKey), _lobby.FreeSlots, _lobby.IsAcceptingPlayers);
+                valid && _lobby.HasReservation(payload.PlayerKey), _lobby.FreeSlots, _lobby.IsAcceptingPlayers,
+                _lobby.HostPartyId, heldForParty, heldForOthers);
             response.Approved = string.IsNullOrEmpty(reason);
             response.Reason = reason;
             if (response.Approved)

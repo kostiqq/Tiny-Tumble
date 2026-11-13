@@ -9,7 +9,7 @@ namespace TinyTumble.Core.Configs
     public sealed class SessionConfig : ScriptableObject
     {
         [Tooltip("Увеличивайте при несовместимых изменениях сетевого протокола: клиент другой версии не войдёт.")]
-        [SerializeField, Min(1)] private int _protocolVersion = 3;
+        [SerializeField, Min(1)] private int _protocolVersion = 4;
 
         [SerializeField] private ushort _port = 7777;
 

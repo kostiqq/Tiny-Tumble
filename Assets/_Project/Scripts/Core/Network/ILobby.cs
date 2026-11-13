@@ -48,15 +48,23 @@ namespace TinyTumble.Core.Network
         /// <summary>false — игрок отвалился, хост держит за ним слот, пока он переподключается.</summary>
         public readonly bool IsConnected;
 
+        /// <summary>Пати игрока (см. <see cref="IParty"/>). Игроки одной пати переезжают между сессиями вместе.</summary>
+        public readonly ulong PartyId;
+
+        /// <summary>Игрок — лидер своей пати: он решает, куда пати переезжает.</summary>
+        public readonly bool IsPartyLeader;
+
         public bool IsHost => IsConnected && ClientId == HostClientId;
 
-        public PlayerSlot(int index, ulong clientId, int localIndex, bool isReady, bool isConnected)
+        public PlayerSlot(int index, ulong clientId, int localIndex, bool isReady, bool isConnected, ulong partyId = 0, bool isPartyLeader = false)
         {
             Index = index;
             ClientId = clientId;
             LocalIndex = localIndex;
             IsReady = isReady;
             IsConnected = isConnected;
+            PartyId = partyId;
+            IsPartyLeader = isPartyLeader;
         }
     }
 }
