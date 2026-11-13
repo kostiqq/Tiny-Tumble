@@ -47,7 +47,7 @@ namespace TinyTumble.Networking.Flow
             }
         }
 
-        public async UniTask<SessionStartResult> JoinAsync(string address)
+        public async UniTask<SessionStartResult> JoinAsync(SessionEndpoint host)
         {
             if (IsBusy)
             {
@@ -62,7 +62,7 @@ namespace TinyTumble.Networking.Flow
                 _localPlayers.TryJoinDefault();
 
                 // В лобби клиента переведёт NetworkGameFlow, как только узнает состояние хоста.
-                return await _session.StartClientAsync(address, _lifetime.Token);
+                return await _session.StartClientAsync(host, _lifetime.Token);
             }
             finally
             {

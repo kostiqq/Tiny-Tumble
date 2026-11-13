@@ -11,7 +11,8 @@
         "UnityEditor.TestRunner",
         "UniTask",
         "MessagePipe",
-        "Unity.Netcode.Runtime"
+        "Unity.Netcode.Runtime",
+        "Unity.Collections"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],

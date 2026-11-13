@@ -76,7 +76,14 @@ namespace TinyTumble.Networking.Debugging
 
         private void OnJoin(string arguments)
         {
-            _launcher.JoinAsync(string.IsNullOrEmpty(arguments) ? "127.0.0.1" : arguments).Forget();
+            string text = string.IsNullOrEmpty(arguments) ? "127.0.0.1" : arguments;
+            if (!SessionEndpoint.TryParse(text, out SessionEndpoint host))
+            {
+                _log.Warning(LogTag, "Usage: net.join <ip[:port]>, e.g. net.join 192.168.0.10:7777");
+                return;
+            }
+
+            _launcher.JoinAsync(host).Forget();
         }
 
         private void OnLeave(string arguments)

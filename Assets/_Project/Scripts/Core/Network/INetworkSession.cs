@@ -41,8 +41,8 @@ namespace TinyTumble.Core.Network
 
         UniTask<SessionStartResult> StartHostAsync(CancellationToken cancellationToken);
 
-        /// <param name="address">IPv4 или localhost, порт через двоеточие необязателен.</param>
-        UniTask<SessionStartResult> StartClientAsync(string address, CancellationToken cancellationToken);
+        /// <param name="host">Адрес хоста. IP без порта подключается к порту сессии по умолчанию.</param>
+        UniTask<SessionStartResult> StartClientAsync(SessionEndpoint host, CancellationToken cancellationToken);
 
         /// <summary>Завершает сессию. Повторный вызов безопасен.</summary>
         void Shutdown();

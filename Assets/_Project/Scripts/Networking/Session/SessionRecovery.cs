@@ -97,7 +97,7 @@ namespace TinyTumble.Networking.Session
                 if (!hostLeft)
                 {
                     _log.Info(LogTag, "Trying to get back to the host...");
-                    if (await TryConnectAsync(drop.HostIp, drop.HostPort, plan.SessionToken, _config.ReconnectWindow, token))
+                    if (await TryConnectAsync(drop.Host, plan.SessionToken, _config.ReconnectWindow, token))
                     {
                         _log.Info(LogTag, "Reconnected to the host.");
                         return;
@@ -118,8 +118,14 @@ namespace TinyTumble.Networking.Session
                         break;
                     }
 
-                    _log.Info(LogTag, $"Looking for the new host at {step.Address}:{step.Port}...");
-                    if (await TryConnectAsync(step.Address, step.Port, plan.SessionToken, _config.MigrationConnectTimeout, token))
+                    if (!step.Host.IsValid)
+                    {
+                        _log.Info(LogTag, "The next candidate is unreachable, skipping it.");
+                        continue;
+                    }
+
+                    _log.Info(LogTag, $"Looking for the new host at {step.Host}...");
+                    if (await TryConnectAsync(step.Host, plan.SessionToken, _config.MigrationConnectTimeout, token))
                     {
                         _log.Info(LogTag, "Joined the new host.");
                         return;
@@ -155,9 +161,9 @@ namespace TinyTumble.Networking.Session
         }
 
         /// <summary>Повторяет попытки до конца окна. Отказ хоста (сессия не та, нет мест) прекращает попытки сразу.</summary>
-        private async UniTask<bool> TryConnectAsync(string ip, ushort port, ulong sessionToken, float window, CancellationToken token)
+        private async UniTask<bool> TryConnectAsync(SessionEndpoint host, ulong sessionToken, float window, CancellationToken token)
         {
-            if (string.IsNullOrEmpty(ip) || port == 0)
+            if (!host.IsValid)
             {
                 return false;
             }
@@ -166,7 +172,7 @@ namespace TinyTumble.Networking.Session
             while (Time.realtimeSinceStartup < deadline)
             {
                 float attempt = Mathf.Min(ConnectAttemptTimeout, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
-                SessionStartResult result = await _session.ConnectAsync(ip, port, attempt, sessionToken, token);
+                SessionStartResult result = await _session.ConnectAsync(host, attempt, sessionToken, token);
                 if (result.Success)
                 {
                     return true;
@@ -174,7 +180,13 @@ namespace TinyTumble.Networking.Session
 
                 if (DisconnectReasons.IsRejection(result.Reason))
                 {
-                    _log.Info(LogTag, $"{ip}:{port} refused us: {result.Reason}.");
+                    _log.Info(LogTag, $"{host} refused us: {result.Reason}.");
+                    return false;
+                }
+
+                // Транспорт этот адрес не понимает: повторять бесполезно.
+                if (result.Reason == DisconnectReasons.InvalidAddress)
+                {
                     return false;
                 }
 
@@ -196,11 +208,11 @@ namespace TinyTumble.Networking.Session
                 MigrationCandidate candidate = plan[i];
                 if (candidate.PlayerKey == ownKey)
                 {
-                    steps.Add(RecoveryStep.Host());
+                    steps.Add(RecoveryStep.BecomeHostStep());
                     break;
                 }
 
-                steps.Add(RecoveryStep.Connect(candidate.Address, candidate.Port));
+                steps.Add(RecoveryStep.Connect(candidate.Endpoint));
             }
 
             return steps;
@@ -210,24 +222,24 @@ namespace TinyTumble.Networking.Session
     public readonly struct RecoveryStep
     {
         public readonly bool BecomeHost;
-        public readonly string Address;
-        public readonly ushort Port;
 
-        private RecoveryStep(bool becomeHost, string address, ushort port)
+        /// <summary>К кому подключаться, если не BecomeHost. None — кандидат недостижим, шаг пропускается.</summary>
+        public readonly SessionEndpoint Host;
+
+        private RecoveryStep(bool becomeHost, SessionEndpoint host)
         {
             BecomeHost = becomeHost;
-            Address = address;
-            Port = port;
+            Host = host;
         }
 
-        public static RecoveryStep Host()
+        public static RecoveryStep BecomeHostStep()
         {
-            return new RecoveryStep(true, null, 0);
+            return new RecoveryStep(true, SessionEndpoint.None);
         }
 
-        public static RecoveryStep Connect(string address, ushort port)
+        public static RecoveryStep Connect(SessionEndpoint host)
         {
-            return new RecoveryStep(false, address, port);
+            return new RecoveryStep(false, host);
         }
     }
 }

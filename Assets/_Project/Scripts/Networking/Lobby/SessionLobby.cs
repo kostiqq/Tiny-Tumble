@@ -10,6 +10,7 @@ using TinyTumble.Core.Network;
 using TinyTumble.Infrastructure.Flow;
 using TinyTumble.Networking.Session;
 using TinyTumble.Networking.Spawning;
+using TinyTumble.Networking.Transport;
 using Unity.Netcode;
 using UnityEngine;
 using VContainer.Unity;
@@ -27,6 +28,7 @@ namespace TinyTumble.Networking.Lobby
         private const string LogTag = "Lobby";
 
         private readonly NetworkRuntime _runtime;
+        private readonly ISessionTransport _transport;
         private readonly NetworkObjectResolver _resolver;
         private readonly GameFlow _localFlow;
         private readonly ILocalPlayers _localPlayers;
@@ -58,6 +60,7 @@ namespace TinyTumble.Networking.Lobby
 
         public SessionLobby(
             NetworkRuntime runtime,
+            ISessionTransport transport,
             NetworkObjectResolver resolver,
             GameFlow localFlow,
             ILocalPlayers localPlayers,
@@ -66,6 +69,7 @@ namespace TinyTumble.Networking.Lobby
             IGameLog log)
         {
             _runtime = runtime;
+            _transport = transport;
             _resolver = resolver;
             _localFlow = localFlow;
             _localPlayers = localPlayers;
@@ -524,7 +528,13 @@ namespace TinyTumble.Networking.Lobby
             }
 
             _approved.Remove(clientId);
-            _peers[clientId] = new PeerInfo(clientId, payload.PlayerKey, GetClientIpv4(clientId), payload.HostPort);
+            SessionEndpoint successor = _transport.GetSuccessorEndpoint(clientId, payload.HostPort);
+            if (!successor.IsValid)
+            {
+                _log.Warning(LogTag, $"Client {clientId} is unreachable for the others and is left out of the migration plan.");
+            }
+
+            _peers[clientId] = new PeerInfo(clientId, payload.PlayerKey, successor);
 
             SlotTable slots = _state.Slots;
             if (_reservedSince.Remove(payload.PlayerKey) && slots.Reconnect(payload.PlayerKey, clientId) > 0)
@@ -577,15 +587,6 @@ namespace TinyTumble.Networking.Lobby
 
             playerKey = 0;
             return false;
-        }
-
-        private uint GetClientIpv4(ulong clientId)
-        {
-            // Адрес вида "1.2.3.4:5678". Если транспорт его не знает, преемник по этому клиенту будет недостижим.
-            string endpoint = _runtime.Transport.GetEndpoint(clientId).ToString();
-            int colon = endpoint.LastIndexOf(':');
-            string host = colon > 0 ? endpoint.Substring(0, colon) : endpoint;
-            return Ipv4.TryParse(host, out uint address) ? address : 0;
         }
 
         private void RebuildPlan()

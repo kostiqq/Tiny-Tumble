@@ -278,12 +278,17 @@ namespace TinyTumble.Bootstrap.Diagnostics
         {
             await WaitForState(GameState.MainMenu, token);
 
+            if (!SessionEndpoint.TryParse(_options.Address, out SessionEndpoint host))
+            {
+                return $"bad -tt-address '{_options.Address}'";
+            }
+
             // Хост может стартовать позже клиента: пробуем подключиться, пока не выйдет.
             float deadline = Time.realtimeSinceStartup + StepTimeout;
             SessionStartResult joined;
             do
             {
-                joined = await _launcher.JoinAsync(_options.Address);
+                joined = await _launcher.JoinAsync(host);
                 if (!joined.Success)
                 {
                     await UniTask.Delay(TimeSpan.FromSeconds(1), cancellationToken: token);

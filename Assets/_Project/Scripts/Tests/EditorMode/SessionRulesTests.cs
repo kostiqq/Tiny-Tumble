@@ -103,9 +103,35 @@ namespace TinyTumble.Tests
         [TestCase("LOCALHOST:9000", "127.0.0.1", (ushort)9000)]
         public void Address_Parses(string text, string expectedIp, ushort expectedPort)
         {
-            Assert.IsTrue(NetworkSession.TryParseAddress(text, 7777, out string ip, out ushort port));
-            Assert.AreEqual(expectedIp, ip);
-            Assert.AreEqual(expectedPort, port);
+            Assert.IsTrue(SessionEndpoint.TryParse(text, out SessionEndpoint endpoint));
+            endpoint = endpoint.WithDefaultPort(7777);
+            Assert.AreEqual(EndpointKind.Ip, endpoint.Kind);
+            Assert.AreEqual(expectedIp, SessionEndpoint.Ipv4ToText(endpoint.Ipv4));
+            Assert.AreEqual(expectedPort, endpoint.Port);
+        }
+
+        [Test]
+        public void Address_WithoutPort_KeepsZeroUntilDefaultApplied()
+        {
+            Assert.IsTrue(SessionEndpoint.TryParse("10.0.0.2", out SessionEndpoint endpoint));
+            Assert.AreEqual(0, endpoint.Port, "0 means 'the session's default port'.");
+            Assert.AreEqual("10.0.0.2", endpoint.ToString());
+            Assert.AreEqual("10.0.0.2:7777", endpoint.WithDefaultPort(7777).ToString());
+
+            // Явный порт и не-IP адреса порт по умолчанию не трогает.
+            Assert.IsTrue(SessionEndpoint.TryParse("10.0.0.2:9000", out SessionEndpoint explicitPort));
+            Assert.AreEqual(9000, explicitPort.WithDefaultPort(7777).Port);
+            SessionEndpoint steam = SessionEndpoint.Steam(42);
+            Assert.AreEqual(steam, steam.WithDefaultPort(7777));
+        }
+
+        [Test]
+        public void Endpoint_FromRaw_RejectsUnknownKind()
+        {
+            Assert.IsFalse(SessionEndpoint.FromRaw(200, 1, 2).IsValid);
+            Assert.IsFalse(SessionEndpoint.Steam(0).IsValid, "SteamID 0 is not a host.");
+            Assert.AreEqual(SessionEndpoint.Ip(SessionEndpoint.LoopbackIpv4, 7777),
+                SessionEndpoint.FromRaw((byte)EndpointKind.Ip, SessionEndpoint.LoopbackIpv4, 7777));
         }
 
         [TestCase("")]
@@ -117,7 +143,7 @@ namespace TinyTumble.Tests
         [TestCase("::1")]
         public void Address_RejectsInvalid(string text)
         {
-            Assert.IsFalse(NetworkSession.TryParseAddress(text, 7777, out _, out _));
+            Assert.IsFalse(SessionEndpoint.TryParse(text, out _));
         }
 
         [Test]

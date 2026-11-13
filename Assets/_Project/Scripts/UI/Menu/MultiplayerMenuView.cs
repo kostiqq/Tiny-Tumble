@@ -80,9 +80,15 @@ namespace TinyTumble.UI.Menu
 
         private async UniTaskVoid JoinAsync(string address)
         {
+            if (!SessionEndpoint.TryParse(address, out SessionEndpoint host))
+            {
+                SetStatus(DisconnectReasonTexts.Get(DisconnectReasons.InvalidAddress));
+                return;
+            }
+
             SetInteractable(false);
             SetStatus(_connectingText);
-            SessionStartResult result = await _launcher.JoinAsync(address);
+            SessionStartResult result = await _launcher.JoinAsync(host);
             // При успехе сцену сменит переход в лобби хоста, и этот объект уже может быть уничтожен.
             if (this == null)
             {

@@ -23,6 +23,7 @@ using TinyTumble.Networking.Debugging;
 using TinyTumble.Networking.Flow;
 using TinyTumble.Networking.Lobby;
 using TinyTumble.Networking.Session;
+using TinyTumble.Networking.Transport;
 using TinyTumble.Networking.Spawning;
 using TinyTumble.UI.Loading;
 using Unity.Netcode;
@@ -94,6 +95,8 @@ namespace TinyTumble.Bootstrap.Scopes
         private void RegisterNetworking(IContainerBuilder builder)
         {
             builder.Register<NetworkRuntime>(Lifetime.Singleton).WithParameter(_networkManagerPrefab);
+            // Пока единственный транспорт — прямой IP; Steam и Relay выберутся здесь же.
+            builder.Register<DirectIpTransport>(Lifetime.Singleton).As<ISessionTransport>();
             builder.Register<NetworkObjectResolver>(Lifetime.Singleton);
             // Пока корень жив, сетевые объекты без своего скоупа (объект сессии) внедряются им.
             builder.RegisterEntryPoint<NetworkResolverScope>();
