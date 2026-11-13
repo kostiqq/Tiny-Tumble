@@ -14,7 +14,7 @@ namespace TinyTumble.Core.Flow
     }
 
     /// <summary>
-    /// Имена сцен. Совпадают с именами файлов в Assets/Scenes и порядком в Build Settings.
+    /// Имена сцен. Совпадают с именами файлов в Assets/_Project/Scenes и порядком в Build Settings.
     /// </summary>
     public static class SceneNames
     {

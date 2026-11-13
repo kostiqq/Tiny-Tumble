@@ -70,7 +70,7 @@
 Сетевая обвязка NGO, без игровых правил.
 
 - **Наши ссылки:** `Core`, `Infrastructure`.
-- **Пакеты:** `Unity.Netcode.Runtime`, `Unity.Networking.Transport`, `VContainer`, `UniTask`, `R3.Unity`; Steam-транспорт и `Facepunch.Steamworks.dll` (precompiled reference) — только здесь.
+- **Пакеты:** `Unity.Netcode.Runtime`, `Unity.Networking.Transport`, `VContainer`, `UniTask`, `R3.Unity`; Steam-транспорт и Steamworks.NET (сборка `com.rlabrecque.steamworks.net` из одноимённого UPM-пакета) — только здесь.
 - **Что лежит:** `INetworkSession` (StartHost/StartClient/Shutdown), `INetworkPrefabInstanceHandler` с инстанцированием через VContainer, регистрация сетевых префабов из Addressables, синхронизация загрузки сцен, модель `PlayerSlot`, лобби, сетевое время, транспорт Steam/Relay.
 - **Правило:** Steam API вызывается только из этой сборки. Остальные работают с интерфейсами (`IFriendsService`, `ILobbyService` и т.п. — интерфейсы в `Core`).
 
@@ -131,7 +131,7 @@ View и Presenter.
 
 Редакторный код, который нужен рядом с конкретной фичей (кастомный инспектор модуля опасности), можно класть в отдельную editor-only сборку этого слоя, например `TinyTumble.Gameplay.Editor` с платформой только Editor. Правило то же: она ссылается вниз и на свой слой, на неё не ссылается никто.
 
-Пример asmdef для тестов (`Assets/_Project/Scripts/Tests/EditMode/TinyTumble.Tests.EditMode.asmdef`):
+Пример asmdef для тестов (`Assets/_Project/Scripts/Tests/EditorMode/TinyTumble.Tests.EditMode.asmdef`):
 ```json
 {
     "name": "TinyTumble.Tests.EditMode",

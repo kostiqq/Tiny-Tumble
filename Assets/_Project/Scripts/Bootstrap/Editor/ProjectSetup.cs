@@ -1,3 +1,4 @@
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -50,17 +51,18 @@ namespace TinyTumble.Bootstrap.Editor
     /// </summary>
     public static class ProjectSetup
     {
-        private const string ScenesFolder = "Assets/Scenes";
-        private const string ConfigsFolder = "Assets/Configs";
-        private const string PrefabsFolder = "Assets/Prefabs";
+        private const string ProjectFolder = "Assets/_Project";
+        private const string ScenesFolder = ProjectFolder + "/Scenes";
+        private const string ConfigsFolder = ProjectFolder + "/Configs";
+        private const string PrefabsFolder = ProjectFolder + "/Prefabs";
         private const string SettingsFolder = "Assets/Settings";
-        private const string MaterialsFolder = "Assets/Art/Materials";
-        private const string PhysicsFolder = "Assets/Art/Physics";
-        private const string FxFolder = "Assets/Prefabs/FX";
-        private const string ItemsFolder = "Assets/AddressableAssets/Items";
-        private const string ArenasFolder = "Assets/AddressableAssets/Arenas";
-        private const string CharactersFolder = "Assets/AddressableAssets/Characters";
-        private const string NetworkFolder = "Assets/AddressableAssets/Network";
+        private const string MaterialsFolder = ProjectFolder + "/Art/Materials";
+        private const string PhysicsFolder = ProjectFolder + "/Art/Physics";
+        private const string FxFolder = PrefabsFolder + "/FX";
+        private const string ItemsFolder = ProjectFolder + "/AddressableAssets/Items";
+        private const string ArenasFolder = ProjectFolder + "/AddressableAssets/Arenas";
+        private const string CharactersFolder = ProjectFolder + "/AddressableAssets/Characters";
+        private const string NetworkFolder = ProjectFolder + "/AddressableAssets/Network";
 
         private const string RootPrefabPath = PrefabsFolder + "/RootLifetimeScope.prefab";
         private const string NetworkManagerPrefabPath = PrefabsFolder + "/NetworkManager.prefab";
