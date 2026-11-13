@@ -70,7 +70,7 @@
 Сетевая обвязка NGO, без игровых правил.
 
 - **Наши ссылки:** `Core`, `Infrastructure`.
-- **Пакеты:** `Unity.Netcode.Runtime`, `Unity.Networking.Transport`, `VContainer`, `UniTask`, `R3.Unity`; Steam-транспорт и `Facepunch.Steamworks.dll` (precompiled reference) — только здесь.
+- **Пакеты:** `Unity.Netcode.Runtime`, `Unity.Networking.Transport`, `VContainer`, `UniTask`, `R3.Unity`; Steam-транспорт и Steamworks.NET (сборка `com.rlabrecque.steamworks.net` из одноимённого UPM-пакета) — только здесь.
 - **Что лежит:** `INetworkSession` (StartHost/StartClient/Shutdown), `INetworkPrefabInstanceHandler` с инстанцированием через VContainer, регистрация сетевых префабов из Addressables, синхронизация загрузки сцен, модель `PlayerSlot`, лобби, сетевое время, транспорт Steam/Relay.
 - **Правило:** Steam API вызывается только из этой сборки. Остальные работают с интерфейсами (`IFriendsService`, `ILobbyService` и т.п. — интерфейсы в `Core`).
 
@@ -88,7 +88,7 @@
 - **Наши ссылки:** `Core`, `Gameplay`.
 - **Пакеты:** `VContainer`, `R3.Unity`, `UniTask`.
 - **Что лежит:** Utility AI ботов, реализация `IPlayerInput` для бота, уровни сложности, бот-напарник против ведущего, конечный автомат выбора атаки ведущего.
-- **Не ссылается на `Networking`:** ИИ работает только на хосте, а решение «запускать ли ИИ» принимает `Gameplay`/`Bootstrap`.
+- **Не ссылается на `Networking` и NGO:** ИИ работает только на хосте, а решение «запускать ли ИИ» принимает `Gameplay`/`Bootstrap`. Персонажей бот видит через интерфейсы `ICombatant` / `ICombatantRegistry` из `Gameplay` — без типов NGO (иначе пришлось бы ссылаться на `Unity.Netcode.Runtime`).
 - **Почему отдельно от Gameplay:** ИИ часто меняется и тюнится, отдельная сборка быстрее перекомпилируется и не тянет за собой UI.
 
 ### 6. `TinyTumble.UI`
@@ -97,7 +97,7 @@ View и Presenter.
 - **Наши ссылки:** `Core`, `Infrastructure`, `Gameplay`.
 - **Пакеты:** `VContainer`, `R3.Unity`, `MessagePipe`, `UniTask`, `Unity.Localization`, `Unity.TextMeshPro`, `UnityEngine.UI` (или UI Toolkit), `Unity.InputSystem` (только для навигации в меню и ребинда).
 - **Что лежит:** экраны, HUD, гардероб, голосование, итоги.
-- **Правило:** UI читает состояние через `ReactiveProperty` и интерфейсы моделей, а действия отправляет командами/сообщениями. UI никогда не меняет игровое состояние напрямую и не знает про NGO.
+- **Правило:** UI читает состояние через `ReactiveProperty` и интерфейсы моделей, а действия отправляет командами/сообщениями. UI никогда не меняет игровое состояние напрямую и не знает про NGO. Пример: HUD матча читает `IMatchCharactersView` / `ICharacterInfo`, а не `PlayerCharacter` (это `NetworkBehaviour`).
 
 ### 7. `TinyTumble.Bootstrap`
 Корень композиции.
@@ -131,7 +131,7 @@ View и Presenter.
 
 Редакторный код, который нужен рядом с конкретной фичей (кастомный инспектор модуля опасности), можно класть в отдельную editor-only сборку этого слоя, например `TinyTumble.Gameplay.Editor` с платформой только Editor. Правило то же: она ссылается вниз и на свой слой, на неё не ссылается никто.
 
-Пример asmdef для тестов (`Assets/_Project/Scripts/Tests/EditMode/TinyTumble.Tests.EditMode.asmdef`):
+Пример asmdef для тестов (`Assets/_Project/Scripts/Tests/EditorMode/TinyTumble.Tests.EditMode.asmdef`):
 ```json
 {
     "name": "TinyTumble.Tests.EditMode",
