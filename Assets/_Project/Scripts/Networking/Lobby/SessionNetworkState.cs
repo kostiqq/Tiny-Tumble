@@ -128,6 +128,13 @@ namespace TinyTumble.Networking.Lobby
             PingRpc(hostTime, RpcTarget.Single(clientId, RpcTargetUse.Temp));
         }
 
+        /// <summary>Клиент уходит сам (в меню), а не теряет связь.</summary>
+        [Rpc(SendTo.Server)]
+        public void ClientLeavingRpc(RpcParams rpcParams = default)
+        {
+            _lobby.OnClientLeaving(rpcParams.Receive.SenderClientId);
+        }
+
         [Rpc(SendTo.Server)]
         public void RequestSlotRpc(byte localIndex, RpcParams rpcParams = default)
         {

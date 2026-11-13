@@ -24,6 +24,8 @@ namespace TinyTumble.Networking.Matchmaking
     /// (пока у нас только своя пати). Лобби заполнилось или время вышло — хост начинает матч, пустые места занимают боты.
     /// Срок и флаги поиска лежат в объекте сессии (<see cref="MatchmakingInfo"/>): их видят все и продолжает
     /// новый хост после миграции.
+    /// Между матчами сессия, собранная поиском, снова открывается: лобби ждёт новых игроков
+    /// <see cref="SessionConfig.BetweenMatchesSeconds"/>, они занимают места ботов, и матч начинается сам.
     /// </summary>
     public sealed class MatchmakingService : IMatchmaking, IInitializable, ITickable, IDisposable
     {
@@ -48,6 +50,9 @@ namespace TinyTumble.Networking.Matchmaking
         private float _startedAt;
         private bool _resumeAfterBounce;
         private bool _startingMatch;
+        private bool _reopenedThisLobby;
+        private bool _wasInLobby;
+        private float _lobbyEnteredAt;
 
         public MatchmakingService(
             NetworkSession session,
@@ -136,6 +141,8 @@ namespace TinyTumble.Networking.Matchmaking
             }
 
             _log.Info(LogTag, "Search cancelled.");
+            // Отменили в лобби — до следующего матча оно снова сам не откроется.
+            _reopenedThisLobby = true;
             StopLoop();
             Unpublish();
             if (_session.IsHost && _lobby.IsAttached)
@@ -151,10 +158,49 @@ namespace TinyTumble.Networking.Matchmaking
         {
             if (!_session.IsHost || !_lobby.IsAttached || _startingMatch)
             {
+                _wasInLobby = false;
                 return;
             }
 
             MatchmakingInfo info = _lobby.Matchmaking;
+            bool inLobby = _lobby.HostState == GameState.Lobby && !_flow.IsTransitioning;
+            if (inLobby && !_wasInLobby)
+            {
+                _lobbyEnteredAt = Time.realtimeSinceStartup;
+                _reopenedThisLobby = false;
+            }
+
+            _wasInLobby = inLobby;
+
+            // Хост сам начал матч кнопкой, пока ждал игроков: объявление снимаем, поиск закончен.
+            if (!inLobby && _lobby.HostState != GameState.Lobby
+                && (State == MatchmakingState.Searching || State == MatchmakingState.WaitingAsHost))
+            {
+                _log.Info(LogTag, "The match started: the lobby is closed for the search.");
+                StopLoop();
+                Unpublish();
+                _lobby.SetMatchmaking(new MatchmakingInfo(false, false, true, 0));
+                SetState(MatchmakingState.Idle);
+                return;
+            }
+
+            // Сессия собрана поиском и вернулась в лобби: снова ждём новых игроков на места ботов.
+            if (inLobby && State == MatchmakingState.Idle && info.Matchmade && !info.Searching && !_reopenedThisLobby && !_party.IsMoving)
+            {
+                _reopenedThisLobby = true;
+                _directory = CurrentDirectory();
+                if (_directory != null)
+                {
+                    float wait = SearchTimeoutOverride > 0f ? SearchTimeoutOverride : _config.BetweenMatchesSeconds;
+                    _deadlineTicks = DateTime.UtcNow.Ticks + TimeSpan.FromSeconds(wait).Ticks;
+                    _startedAt = Time.realtimeSinceStartup;
+                    _excluded.Clear();
+                    _log.Info(LogTag, $"Back in the lobby: open for new players for {wait:0} s.");
+                    StartLoop(false, true);
+                }
+
+                return;
+            }
 
             // Мы стали хостом после миграции, а сессия ещё ждала игроков: продолжаем с тем же сроком.
             if (State == MatchmakingState.Idle && info.Searching && !_party.IsMoving)
@@ -182,9 +228,12 @@ namespace TinyTumble.Networking.Matchmaking
                 _directory.Publish(CountPlayers(), _lobby.FreeSlots);
             }
 
-            bool full = _lobby.FreeSlots == 0;
-            bool timeUp = DateTime.UtcNow.Ticks >= _deadlineTicks;
-            if ((full || timeUp) && _lobby.HostState == GameState.Lobby && !_flow.IsTransitioning)
+            // Полное лобби не стартует сразу после возврата из матча: дать прочитать итоги и уйти желающим.
+            bool full = _lobby.FreeSlots == 0 && Time.realtimeSinceStartup - _lobbyEnteredAt >= _config.MinLobbySeconds;
+
+            // Время вышло, но к нам как раз подключается пати: дождёмся её (места держатся не дольше 2 × ConnectTimeout).
+            bool timeUp = DateTime.UtcNow.Ticks >= _deadlineTicks && !_lobby.HasPartyHolds;
+            if ((full || timeUp) && inLobby)
             {
                 StartMatchAsync(full).Forget();
             }

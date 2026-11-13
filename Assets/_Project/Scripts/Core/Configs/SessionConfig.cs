@@ -51,6 +51,12 @@ namespace TinyTumble.Core.Configs
         [Tooltip("Сколько хост меряет RTT пришедшей по поиску пати, с.")]
         [SerializeField, Min(0.5f)] private float _pingProbeSeconds = 3f;
 
+        [Tooltip("Между матчами сессии, собранной поиском: сколько лобби ждёт новых игроков до следующего матча, с.")]
+        [SerializeField, Min(5f)] private float _betweenMatchesSeconds = 25f;
+
+        [Tooltip("Полное лобби начинает матч не раньше, чем через столько секунд после возврата в лобби: дать прочитать итоги и уйти.")]
+        [SerializeField, Min(0f)] private float _minLobbySeconds = 8f;
+
         [Header("Синхронизация движения")]
         [Tooltip("Хост рассылает состояние персонажей раз в столько тиков физики (тик = 0.02 с).")]
         [SerializeField, Range(1, 10)] private int _snapshotIntervalTicks = 2;
@@ -84,6 +90,8 @@ namespace TinyTumble.Core.Configs
         public int MaxEstimatedPingMs => _maxEstimatedPingMs;
         public int MaxMeasuredRttMs => _maxMeasuredRttMs;
         public float PingProbeSeconds => _pingProbeSeconds;
+        public float BetweenMatchesSeconds => _betweenMatchesSeconds;
+        public float MinLobbySeconds => _minLobbySeconds;
         public int SnapshotIntervalTicks => _snapshotIntervalTicks;
         public float InterpolationDelay => _interpolationDelay;
         public float PredictionTolerance => _predictionTolerance;

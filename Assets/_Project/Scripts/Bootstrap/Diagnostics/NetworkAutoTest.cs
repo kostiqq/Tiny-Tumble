@@ -19,6 +19,7 @@ using TinyTumble.Networking.Party;
 using TinyTumble.Networking.Session;
 using TinyTumble.Networking.Transport;
 using TinyTumble.UI.Lobby;
+using TinyTumble.UI.Menu;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.LowLevel;
@@ -120,6 +121,7 @@ namespace TinyTumble.Bootstrap.Diagnostics
             {
                 Prepare();
                 UniTask<string> scenario = _options.Scenario == AutoTestScenario.Matchmake ? RunMatchmakeAsync(token)
+                    : _options.Scenario == AutoTestScenario.LateJoin ? RunLateJoinAsync(token)
                     : _options.IsHost ? RunHostAsync(token)
                     : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? RunPartyLeaderAsync(token)
                     : RunClientAsync(token);
@@ -136,7 +138,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
                 failure = exception.GetType().Name + ": " + exception.Message;
             }
 
-            string role = _options.Scenario == AutoTestScenario.Matchmake ? (_session.IsHost ? "matchmade host" : "matchmade client")
+            string role = _options.Scenario == AutoTestScenario.Matchmake || _options.Scenario == AutoTestScenario.LateJoin
+                ? (_session.IsHost ? "matchmade host" : "matchmade client")
                 : _options.IsHost ? "host" : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? "party leader" : "client";
             if (failure == null)
             {
@@ -581,6 +584,141 @@ namespace TinyTumble.Bootstrap.Diagnostics
             await WaitForState(GameState.Lobby, token);
             Step("back in lobby, leaving");
             await _flow.GoToAsync(GameState.MainMenu);
+            return null;
+        }
+
+        /// <summary>
+        /// Люди между матчами. Ранние копии находят друг друга и играют первый матч с ботами; лобби после матча снова
+        /// открывается, опоздавший (-tt-delay) нажимает «Найти игру» в меню, приходит на место бота, и второй матч идёт
+        /// с ним. В конце клиенты уходят в меню, и хост сразу освобождает их слоты: сессия собрана поиском.
+        /// </summary>
+        private async UniTask<string> RunLateJoinAsync(CancellationToken token)
+        {
+            await WaitForState(GameState.MainMenu, token);
+            bool late = _options.StartDelay > 0f;
+            if (late)
+            {
+                Step($"waiting {_options.StartDelay:0} s before searching");
+                await UniTask.Delay(TimeSpan.FromSeconds(_options.StartDelay), ignoreTimeScale: true, cancellationToken: token);
+            }
+
+            _matchmaking.SearchTimeoutOverride = _options.SearchSeconds;
+            var menu = Object.FindAnyObjectByType<MultiplayerMenuView>();
+            if (menu == null || !menu.PressFindGame() || _matchmaking.State == MatchmakingState.Idle)
+            {
+                return "the 'Find game' button in the menu did not start the search";
+            }
+
+            int everyone = _options.Clients;
+            if (late)
+            {
+                Step("searching late, the others should be between matches");
+                if (!await WaitUntil(() => !_party.IsMoving && _session.IsRemoteClient && CountConnectedPlayers() >= everyone, token))
+                {
+                    return $"did not join the others between matches: {CountConnectedPlayers()} in our session, search {_matchmaking.State}";
+                }
+
+                string late1 = await PlayMatchmadeMatchAsync(everyone, token);
+                if (late1 != null)
+                {
+                    return late1;
+                }
+
+                await _flow.GoToAsync(GameState.MainMenu);
+                return null;
+            }
+
+            int early = everyone - 1;
+            if (!await WaitUntil(() => !_party.IsMoving && _session.Role.CurrentValue != SessionRole.None && CountConnectedPlayers() >= early, token))
+            {
+                return $"early players did not meet: {CountConnectedPlayers()} of {early}";
+            }
+
+            if (_session.IsHost)
+            {
+                var panel = Object.FindAnyObjectByType<LobbyMatchmakingPanel>();
+                if (panel == null || string.IsNullOrEmpty(panel.Status) || !panel.IsCancelShown)
+                {
+                    return $"the lobby does not show the search: status '{(panel != null ? panel.Status : "no panel")}'";
+                }
+
+                Step($"lobby shows: {panel.Status}");
+            }
+
+            string first = await PlayMatchmadeMatchAsync(early, token);
+            if (first != null)
+            {
+                return first;
+            }
+
+            if (_session.IsHost && !await WaitUntil(() => _matchmaking.State == MatchmakingState.WaitingAsHost && _matchmaking.SecondsLeft >= 0f, token))
+            {
+                return $"the lobby did not reopen for new players after the match: search {_matchmaking.State}";
+            }
+
+            Step("back in the lobby, waiting for a late player");
+            if (!await WaitUntil(() => CountConnectedPlayers() >= everyone, token))
+            {
+                return $"the late player did not come: {CountConnectedPlayers()} of {everyone}";
+            }
+
+            string second = await PlayMatchmadeMatchAsync(everyone, token);
+            if (second != null)
+            {
+                return second;
+            }
+
+            if (!_session.IsHost)
+            {
+                await _flow.GoToAsync(GameState.MainMenu);
+                return null;
+            }
+
+            if (!await WaitUntil(() => CountConnectedRemoteSlots() == 0, token))
+            {
+                return "clients did not leave";
+            }
+
+            // Незнакомцы из поиска ушли сами: их места свободны сразу, а не держатся 60 с.
+            if (CountReservedSlots() != 0)
+            {
+                return "slots of strangers who left a matchmade session must be freed, not reserved";
+            }
+
+            Step("clients left, their slots are free");
+            return null;
+        }
+
+        /// <summary>Матч сессии, собранной поиском: humans людей, остальное — боты. Хост заканчивает его и ведёт всех в лобби.</summary>
+        private async UniTask<string> PlayMatchmadeMatchAsync(int humans, CancellationToken token)
+        {
+            MatchEntryPoint match = await WaitForMatch(humans, token);
+            if (match == null)
+            {
+                return $"the match for {humans} players did not start";
+            }
+
+            int bots = match.Characters.Count - CountHumans(match);
+            if (CountHumans(match) != humans || bots != _lobby.Capacity - humans)
+            {
+                return $"expected {humans} players and {_lobby.Capacity - humans} bot(s), got {CountHumans(match)} and {bots}";
+            }
+
+            Step($"matchmade match: {humans} players and {bots} bot(s)");
+            if (_session.IsHost)
+            {
+                await UniTask.Delay(TimeSpan.FromSeconds(3), cancellationToken: token);
+                _matchEnded.Publish(new MatchEnded(MatchEnded.NoWinner));
+                await WaitForState(GameState.Results, token);
+                await UniTask.Delay(TimeSpan.FromSeconds(1), cancellationToken: token);
+                await _flow.GoToAsync(GameState.Lobby);
+            }
+            else
+            {
+                await WaitForState(GameState.Results, token);
+            }
+
+            await WaitForState(GameState.Lobby, token);
             return null;
         }
 

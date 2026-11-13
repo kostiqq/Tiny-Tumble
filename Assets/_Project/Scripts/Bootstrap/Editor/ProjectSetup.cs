@@ -206,6 +206,26 @@ namespace TinyTumble.Bootstrap.Editor
             }
         }
 
+        /// <summary>
+        /// Пересоздаёт сцены с UI сессии — главное меню и лобби, не трогая префабы и остальные сцены. batchmode:
+        /// -executeMethod TinyTumble.Bootstrap.Editor.ProjectSetup.RunSessionUiScenesBatch
+        /// </summary>
+        public static void RunSessionUiScenesBatch()
+        {
+            try
+            {
+                SetupMainMenuScene();
+                SetupLobbyScene();
+                AssetDatabase.SaveAssets();
+                EditorApplication.Exit(0);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                EditorApplication.Exit(1);
+            }
+        }
+
         // ---------- Ассеты ----------
 
         private static T EnsureAsset<T>(string path) where T : ScriptableObject
@@ -714,6 +734,9 @@ namespace TinyTumble.Bootstrap.Editor
             GameObject ui = CreateUiRoot();
             CreateTitle(ui.transform, "Tiny Tumble");
 
+            Button find = CreateButton(ui.transform, ButtonNames.FindGame, "Найти игру");
+            SetRect((RectTransform)find.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), new Vector2(0f, 520f));
+
             Button host = CreateButton(ui.transform, ButtonNames.Host, "Играть");
             SetRect((RectTransform)host.transform, new Vector2(0.5f, 0f), new Vector2(480f, 110f), new Vector2(0f, 380f));
 
@@ -730,6 +753,7 @@ namespace TinyTumble.Bootstrap.Editor
             var serialized = new SerializedObject(menu);
             serialized.FindProperty("_hostButton").objectReferenceValue = host;
             serialized.FindProperty("_joinButton").objectReferenceValue = join;
+            serialized.FindProperty("_findButton").objectReferenceValue = find;
             serialized.FindProperty("_addressField").objectReferenceValue = address;
             serialized.FindProperty("_statusLabel").objectReferenceValue = status;
             serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -777,6 +801,27 @@ namespace TinyTumble.Bootstrap.Editor
             serialized = new SerializedObject(inviteButton);
             serialized.FindProperty("_button").objectReferenceValue = invite;
             serialized.FindProperty("_group").objectReferenceValue = group;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            // Поиск игры: строка состояния под заголовком, кнопки — колонкой справа. Лишние прячет сама панель.
+            Text searchStatus = CreateText(ui.transform, "SearchStatus", string.Empty, 36, TextAnchor.MiddleCenter);
+            SetRect(searchStatus.rectTransform, new Vector2(0.5f, 1f), new Vector2(1400f, 60f), new Vector2(0f, -290f));
+            Button findGame = CreateButton(ui.transform, ButtonNames.FindGame, "Найти игру");
+            SetRect((RectTransform)findGame.transform, new Vector2(1f, 0f), new Vector2(440f, 110f), new Vector2(-260f, 460f));
+            Button cancelSearch = CreateButton(ui.transform, ButtonNames.CancelSearch, "Отменить поиск");
+            SetRect((RectTransform)cancelSearch.transform, new Vector2(1f, 0f), new Vector2(440f, 110f), new Vector2(-260f, 460f));
+            Button regroup = CreateButton(ui.transform, ButtonNames.Regroup, "Уйти своей пати");
+            SetRect((RectTransform)regroup.transform, new Vector2(1f, 0f), new Vector2(440f, 110f), new Vector2(-260f, 330f));
+
+            var panel = ui.AddComponent<LobbyMatchmakingPanel>();
+            serialized = new SerializedObject(panel);
+            serialized.FindProperty("_status").objectReferenceValue = searchStatus;
+            serialized.FindProperty("_findButton").objectReferenceValue = findGame;
+            serialized.FindProperty("_findGroup").objectReferenceValue = findGame.gameObject.AddComponent<CanvasGroup>();
+            serialized.FindProperty("_cancelButton").objectReferenceValue = cancelSearch;
+            serialized.FindProperty("_cancelGroup").objectReferenceValue = cancelSearch.gameObject.AddComponent<CanvasGroup>();
+            serialized.FindProperty("_regroupButton").objectReferenceValue = regroup;
+            serialized.FindProperty("_regroupGroup").objectReferenceValue = regroup.gameObject.AddComponent<CanvasGroup>();
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             CreateScope<LobbyLifetimeScope>(ui);

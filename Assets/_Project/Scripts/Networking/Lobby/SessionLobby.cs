@@ -54,6 +54,7 @@ namespace TinyTumble.Networking.Lobby
         private readonly Dictionary<ulong, PeerParty> _peerParties = new Dictionary<ulong, PeerParty>();
         private readonly Dictionary<ulong, PartyHold> _partyHolds = new Dictionary<ulong, PartyHold>();
         private readonly HashSet<ulong> _departingParties = new HashSet<ulong>();
+        private readonly HashSet<ulong> _leavingClients = new HashSet<ulong>();
         private HostSeed _hostSeed;
         private ulong _sessionToken;
 
@@ -410,6 +411,31 @@ namespace TinyTumble.Networking.Lobby
             }
         }
 
+        /// <summary>Хост: есть пати, для которых держатся места, пока они подключаются.</summary>
+        public bool HasPartyHolds
+        {
+            get
+            {
+                GetPartyHolds(0, out _, out int held);
+                return held > 0;
+            }
+        }
+
+        /// <summary>
+        /// Клиент уходит сам (в меню). В сессии, собранной поиском, хост сразу освободит его слот для новых игроков;
+        /// в сессии друзей слот, как и при обрыве, держится — друг может вернуться.
+        /// </summary>
+        public bool AnnounceClientLeaving()
+        {
+            if (_state == null || IsHost)
+            {
+                return false;
+            }
+
+            _state.ClientLeavingRpc();
+            return true;
+        }
+
         /// <summary>Хост уходит сам: клиенты сразу пойдут к преемнику, не дожидаясь таймаута.</summary>
         public bool AnnounceLeaving()
         {
@@ -490,6 +516,7 @@ namespace TinyTumble.Networking.Lobby
             _peerParties.Clear();
             _partyHolds.Clear();
             _departingParties.Clear();
+            _leavingClients.Clear();
             _hasPendingMove = false;
             _state = null;
             RebuildSlots();
@@ -630,6 +657,14 @@ namespace TinyTumble.Networking.Lobby
                 {
                     Debug.LogException(exception);
                 }
+            }
+        }
+
+        public void OnClientLeaving(ulong clientId)
+        {
+            if (IsHost)
+            {
+                _leavingClients.Add(clientId);
             }
         }
 
@@ -885,12 +920,23 @@ namespace TinyTumble.Networking.Lobby
 
             SlotTable slots = _state.Slots;
             ulong leavingKey = slots.KeyOfClient(clientId);
+            bool leftOnPurpose = _leavingClients.Remove(clientId) && _state.Matchmaking.Matchmade;
             if (leavingKey != 0 && slots.TryGetParty(leavingKey, out ulong partyId, out _) && _departingParties.Contains(partyId))
             {
                 // Ушёл вместе со своей пати: ждать его обратно незачем.
                 slots.RemovePlayer(leavingKey);
                 _state.SetSlots(slots);
                 _log.Info(LogTag, $"Client {clientId} left with party {partyId:X}, slots freed.");
+                RebuildPlan();
+                return;
+            }
+
+            if (leavingKey != 0 && leftOnPurpose)
+            {
+                // Незнакомец из поиска вышел в меню: его место нужно следующему игроку, а не резерву.
+                slots.RemovePlayer(leavingKey);
+                _state.SetSlots(slots);
+                _log.Info(LogTag, $"Client {clientId} left the matchmade session, slots freed.");
                 RebuildPlan();
                 return;
             }

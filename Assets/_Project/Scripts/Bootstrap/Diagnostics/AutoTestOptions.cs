@@ -16,8 +16,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
     ///                                 и исход драки не должен досрочно заканчивать матч
     ///   -tt-party leader|member       роль клиента в сценарии partymove
     ///   -tt-target 127.0.0.1:7777     куда лидер уводит пати в сценарии partymove
-    ///   -tt-search 20                 matchmake: сколько искать игроков до старта с ботами, с
-    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost|partymove|matchmake
+    ///   -tt-search 20                 matchmake, latejoin: сколько искать игроков до старта с ботами (и ждать между матчами), с
+    ///   -tt-delay 22                  latejoin: эта копия начинает искать позже остальных, через столько секунд
+    ///   -tt-scenario full|hostleave|hostcrash|clientdrop|steamhost|partymove|matchmake|latejoin
     ///       full       — лобби → матч → итоги → лобби, проверка движения своего и чужого кубика;
     ///       hostleave  — хост выходит в меню посреди матча, клиент становится новым хостом;
     ///       hostcrash  — процесс хоста убит посреди матча; первый по плану клиент становится хостом, остальные к нему переходят;
@@ -26,7 +27,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
     ///       partymove  — три копии: хост (цель), лидер пати (сначала сам хост своей пати) и участник; пати переезжает
     ///                    к хосту и возвращается к лидеру;
     ///       matchmake  — несколько копий (-tt-clients — сколько всего) ищут игру локальным матчмейкером, сходятся в одно
-    ///                    лобби, по сроку поиска начинается матч, пустые места занимают боты.
+    ///                    лобби, по сроку поиска начинается матч, пустые места занимают боты;
+    ///       latejoin   — как matchmake, но одна копия (-tt-delay) приходит между матчами: лобби после матча снова
+    ///                    открывается, опоздавший занимает место бота, второй матч идёт с ним.
     /// </summary>
     public sealed class AutoTestOptions
     {
@@ -45,6 +48,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         /// <summary>matchmake: срок поиска до старта с ботами, с.</summary>
         public float SearchSeconds { get; private set; } = 20f;
+
+        /// <summary>latejoin: через сколько секунд эта копия начинает искать; 0 — сразу.</summary>
+        public float StartDelay { get; private set; }
 
         /// <summary>partymove: куда лидер уводит пати.</summary>
         public string Target { get; private set; } = "127.0.0.1:7777";
@@ -94,6 +100,11 @@ namespace TinyTumble.Bootstrap.Diagnostics
             if (float.TryParse(GetValue(args, "-tt-search"), NumberStyles.Float, CultureInfo.InvariantCulture, out float search) && search > 0f)
             {
                 options.SearchSeconds = search;
+            }
+
+            if (float.TryParse(GetValue(args, "-tt-delay"), NumberStyles.Float, CultureInfo.InvariantCulture, out float delay) && delay > 0f)
+            {
+                options.StartDelay = delay;
             }
 
             options.IsPartyLeader = string.Equals(GetValue(args, "-tt-party"), "leader", StringComparison.OrdinalIgnoreCase);
@@ -146,5 +157,8 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         /// <summary>Все копии ищут игру, сходятся в одно лобби и по сроку поиска играют матч с ботами на пустых местах.</summary>
         Matchmake,
+
+        /// <summary>Двое находят друг друга и играют с ботами; третий приходит между матчами и играет второй матч.</summary>
+        LateJoin,
     }
 }
