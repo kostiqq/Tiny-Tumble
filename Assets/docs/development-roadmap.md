@@ -20,7 +20,7 @@
 | Контент | Addressables | Арены, персонажи, косметика, боссы, звук |
 | Ввод | New Input System | `PlayerInputManager` для локального коопа до 4 геймпадов |
 | Локализация | Unity Localization | RU + EN с первого UI |
-| Онлайн-сервисы | Steamworks (Facepunch.Steamworks) | Инвайты, лобби, Remote Play Together; транспорт для NGO — Steam-транспорт из community-пакетов, Unity Relay как запасной вариант |
+| Онлайн-сервисы | Steamworks (Steamworks.NET, UPM-пакет `com.rlabrecque.steamworks.net`) | Инвайты, лобби, Remote Play Together; транспорт для NGO — Steam-транспорт на `SteamNetworkingSockets` под Steamworks.NET, Unity Relay как запасной вариант |
 | CI / сборки | GameCI (GitHub Actions) | Автосборка Windows-билда на каждый merge в main |
 | Контроль версий | Git + Git LFS | `.gitattributes` под Unity, Smart Merge для сцен и префабов |
 

@@ -16,5 +16,12 @@ MonoBehaviour:
   _minRetargetInterval: 1.5
   _maxRetargetInterval: 3.5
   _arriveDistance: 0.4
+  _aggressionDelay: 2.5
+  _aggroRange: 0
+  _pushRange: 1.1
+  _dashRange: 3
+  _dashChance: 0.25
+  _edgeRetreatRadius: 3.8
+  _difficulty: 1
   _reactionTimes: {x: 0.6, y: 0.35, z: 0.2}
   _parryChances: {x: 0, y: 0.3, z: 0.6}
