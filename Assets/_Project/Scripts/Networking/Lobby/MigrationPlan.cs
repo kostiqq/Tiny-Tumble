@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
-using System.Net.Sockets;
+using TinyTumble.Core.Network;
 using Unity.Netcode;
 
 namespace TinyTumble.Networking.Lobby
@@ -96,13 +95,18 @@ namespace TinyTumble.Networking.Lobby
 
         /// <summary>
         /// Строит план: подключённые удалённые клиенты по возрастанию их первого слота, клиенты без слота — в конце.
+        /// Клиенты, до которых другим не достучаться, в план не входят: иначе такой клиент поднял бы свой хост,
+        /// остальные пропустили бы его, и сессия раскололась бы надвое. Сам он при миграции только подключается.
         /// </summary>
         public static MigrationPlan Build(ulong sessionToken, SlotTable slots, IReadOnlyList<PeerInfo> peers)
         {
             var ordered = new List<PeerInfo>(peers.Count);
             for (int i = 0; i < peers.Count; i++)
             {
-                ordered.Add(peers[i]);
+                if (peers[i].SuccessorEndpoint.IsValid)
+                {
+                    ordered.Add(peers[i]);
+                }
             }
 
             ordered.Sort((a, b) => Rank(slots, a).CompareTo(Rank(slots, b)));
@@ -111,7 +115,7 @@ namespace TinyTumble.Networking.Lobby
             for (int i = 0; i < ordered.Count; i++)
             {
                 PeerInfo peer = ordered[i];
-                if (!plan.TryAdd(new MigrationCandidate(peer.PlayerKey, peer.Ipv4, peer.HostPort)))
+                if (!plan.TryAdd(new MigrationCandidate(peer.PlayerKey, peer.SuccessorEndpoint)))
                 {
                     break;
                 }
@@ -156,30 +160,36 @@ namespace TinyTumble.Networking.Lobby
     public struct MigrationCandidate : INetworkSerializable, IEquatable<MigrationCandidate>
     {
         private ulong _playerKey;
-        private uint _ipv4;
+
+        // SessionEndpoint лежит в Core без NGO, поэтому по сети идут его поля.
+        private byte _kind;
+        private ulong _address;
         private ushort _port;
 
-        public MigrationCandidate(ulong playerKey, uint ipv4, ushort port)
+        public MigrationCandidate(ulong playerKey, SessionEndpoint endpoint)
         {
             _playerKey = playerKey;
-            _ipv4 = ipv4;
-            _port = port;
+            _kind = (byte)endpoint.Kind;
+            _address = endpoint.Address;
+            _port = endpoint.Port;
         }
 
         public ulong PlayerKey => _playerKey;
-        public ushort Port => _port;
-        public string Address => Ipv4.ToText(_ipv4);
+
+        /// <summary>None, если хост не знал, как достучаться до этого клиента.</summary>
+        public SessionEndpoint Endpoint => SessionEndpoint.FromRaw(_kind, _address, _port);
 
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref _playerKey);
-            serializer.SerializeValue(ref _ipv4);
+            serializer.SerializeValue(ref _kind);
+            serializer.SerializeValue(ref _address);
             serializer.SerializeValue(ref _port);
         }
 
         public bool Equals(MigrationCandidate other)
         {
-            return _playerKey == other._playerKey && _ipv4 == other._ipv4 && _port == other._port;
+            return _playerKey == other._playerKey && _kind == other._kind && _address == other._address && _port == other._port;
         }
 
         public override bool Equals(object obj)
@@ -189,7 +199,7 @@ namespace TinyTumble.Networking.Lobby
 
         public override int GetHashCode()
         {
-            return HashCode.Combine(_playerKey, _ipv4, _port);
+            return HashCode.Combine(_playerKey, _kind, _address, _port);
         }
     }
 
@@ -199,40 +209,17 @@ namespace TinyTumble.Networking.Lobby
         public readonly ulong ClientId;
         public readonly ulong PlayerKey;
 
-        /// <summary>Адрес клиента, каким его видит хост. Через NAT в интернете он может быть недоступен другим (см. networking.md).</summary>
-        public readonly uint Ipv4;
+        /// <summary>
+        /// Куда подключаться к клиенту, если он станет преемником. Для IP это адрес, каким его видит хост:
+        /// через NAT в интернете он может быть недоступен другим (см. networking.md).
+        /// </summary>
+        public readonly SessionEndpoint SuccessorEndpoint;
 
-        /// <summary>Порт, на котором клиент поднимет хост, если станет преемником.</summary>
-        public readonly ushort HostPort;
-
-        public PeerInfo(ulong clientId, ulong playerKey, uint ipv4, ushort hostPort)
+        public PeerInfo(ulong clientId, ulong playerKey, SessionEndpoint successorEndpoint)
         {
             ClientId = clientId;
             PlayerKey = playerKey;
-            Ipv4 = ipv4;
-            HostPort = hostPort;
-        }
-    }
-
-    /// <summary>IPv4 в одном uint: так адрес влезает в сетевую структуру без строк.</summary>
-    public static class Ipv4
-    {
-        public static bool TryParse(string text, out uint address)
-        {
-            address = 0;
-            if (!IPAddress.TryParse(text, out IPAddress parsed) || parsed.AddressFamily != AddressFamily.InterNetwork)
-            {
-                return false;
-            }
-
-            byte[] bytes = parsed.GetAddressBytes();
-            address = ((uint)bytes[0] << 24) | ((uint)bytes[1] << 16) | ((uint)bytes[2] << 8) | bytes[3];
-            return true;
-        }
-
-        public static string ToText(uint address)
-        {
-            return $"{(address >> 24) & 0xFF}.{(address >> 16) & 0xFF}.{(address >> 8) & 0xFF}.{address & 0xFF}";
+            SuccessorEndpoint = successorEndpoint;
         }
     }
 }

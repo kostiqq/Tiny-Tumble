@@ -14,7 +14,12 @@ using TinyTumble.Core.Scenes;
 using TinyTumble.Gameplay.Characters;
 using TinyTumble.Gameplay.Match;
 using TinyTumble.Networking.Debugging;
+using TinyTumble.Networking.Matchmaking;
+using TinyTumble.Networking.Party;
 using TinyTumble.Networking.Session;
+using TinyTumble.Networking.Transport;
+using TinyTumble.UI.Lobby;
+using TinyTumble.UI.Menu;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.LowLevel;
@@ -54,6 +59,10 @@ namespace TinyTumble.Bootstrap.Diagnostics
         private readonly IPublisher<MatchEnded> _matchEnded;
         private readonly NetworkSimulatorControl _simulator;
         private readonly MatchSetup _matchSetup;
+        private readonly SessionTransports _transports;
+        private readonly ISessionInvites _invites;
+        private readonly PartyService _party;
+        private readonly MatchmakingService _matchmaking;
         private readonly IGameLog _log;
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
         private readonly List<ulong> _clientsBuffer = new List<ulong>();
@@ -70,6 +79,10 @@ namespace TinyTumble.Bootstrap.Diagnostics
             IPublisher<MatchEnded> matchEnded,
             NetworkSimulatorControl simulator,
             MatchSetup matchSetup,
+            SessionTransports transports,
+            ISessionInvites invites,
+            PartyService party,
+            MatchmakingService matchmaking,
             IGameLog log)
         {
             _options = options;
@@ -82,6 +95,10 @@ namespace TinyTumble.Bootstrap.Diagnostics
             _matchEnded = matchEnded;
             _simulator = simulator;
             _matchSetup = matchSetup;
+            _transports = transports;
+            _invites = invites;
+            _party = party;
+            _matchmaking = matchmaking;
             _log = log;
         }
 
@@ -103,7 +120,11 @@ namespace TinyTumble.Bootstrap.Diagnostics
             try
             {
                 Prepare();
-                UniTask<string> scenario = _options.IsHost ? RunHostAsync(token) : RunClientAsync(token);
+                UniTask<string> scenario = _options.Scenario == AutoTestScenario.Matchmake ? RunMatchmakeAsync(token)
+                    : _options.Scenario == AutoTestScenario.LateJoin ? RunLateJoinAsync(token)
+                    : _options.IsHost ? RunHostAsync(token)
+                    : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? RunPartyLeaderAsync(token)
+                    : RunClientAsync(token);
                 UniTask timeout = UniTask.Delay(TimeSpan.FromSeconds(OverallTimeout), ignoreTimeScale: true, cancellationToken: token);
                 (bool finished, string result) = await UniTask.WhenAny(scenario, timeout);
                 failure = finished ? result : "overall timeout";
@@ -117,7 +138,9 @@ namespace TinyTumble.Bootstrap.Diagnostics
                 failure = exception.GetType().Name + ": " + exception.Message;
             }
 
-            string role = _options.IsHost ? "host" : "client";
+            string role = _options.Scenario == AutoTestScenario.Matchmake || _options.Scenario == AutoTestScenario.LateJoin
+                ? (_session.IsHost ? "matchmade host" : "matchmade client")
+                : _options.IsHost ? "host" : _options.Scenario == AutoTestScenario.PartyMove && _options.IsPartyLeader ? "party leader" : "client";
             if (failure == null)
             {
                 _log.Info(LogTag, $"[AutoTest] RESULT PASS {role} ({_options.Scenario})");
@@ -145,6 +168,10 @@ namespace TinyTumble.Bootstrap.Diagnostics
                 _session.HostPort = _options.Port;
             }
 
+            // Копии игры на одной машине сидят под одним аккаунтом Steam и через Steam друг к другу не подключатся.
+            // Это касается и переездов пати: лидер собирает пати тем же транспортом, через который шла сессия.
+            _transports.HostPreference = _options.Scenario == AutoTestScenario.SteamHost ? HostTransportPreference.Steam : HostTransportPreference.Ip;
+
             if (_options.Bots >= 0)
             {
                 _matchSetup.BotCount = _options.Bots;
@@ -168,6 +195,40 @@ namespace TinyTumble.Bootstrap.Diagnostics
 
         // ---------- Хост ----------
 
+        private static bool IsInviteButtonShown()
+        {
+            var button = Object.FindAnyObjectByType<LobbyInviteButton>();
+            return button != null && button.IsShown;
+        }
+
+        private async UniTask<string> RunSteamHostAsync(CancellationToken token)
+        {
+            if (_session.TransportKind != EndpointKind.Steam)
+            {
+                return "hosted over " + _session.TransportKind + ", expected Steam";
+            }
+
+            Step("hosting over Steam, waiting for the invite lobby");
+            if (!await WaitUntil(() => _invites.CanInvite, token))
+            {
+                return "Steam lobby for invites was not created";
+            }
+
+            if (!await WaitUntil(IsInviteButtonShown, token))
+            {
+                return "the lobby has no visible 'Invite' button while the Steam lobby is open";
+            }
+
+            Step("invite lobby is open and the 'Invite' button is shown, leaving to the main menu");
+            await _flow.GoToAsync(GameState.MainMenu);
+            if (!await WaitUntil(() => !_invites.CanInvite, token))
+            {
+                return "Steam lobby was not left after the session ended";
+            }
+
+            return null;
+        }
+
         private async UniTask<string> RunHostAsync(CancellationToken token)
         {
             await WaitForState(GameState.MainMenu, token);
@@ -178,7 +239,22 @@ namespace TinyTumble.Bootstrap.Diagnostics
             }
 
             await WaitForState(GameState.Lobby, token);
+            if (_options.Scenario == AutoTestScenario.SteamHost)
+            {
+                return await RunSteamHostAsync(token);
+            }
+
             _localPlayers.TryJoinDefault();
+            if (IsInviteButtonShown())
+            {
+                return "the 'Invite' button is shown in a session over IP";
+            }
+
+            if (_options.Scenario == AutoTestScenario.PartyMove)
+            {
+                return await HostReceivesPartyAsync(token);
+            }
+
             Step("lobby open, waiting for clients");
 
             if (!await WaitUntil(() => CountReadyRemoteClients() >= _options.Clients, token))
@@ -278,12 +354,17 @@ namespace TinyTumble.Bootstrap.Diagnostics
         {
             await WaitForState(GameState.MainMenu, token);
 
+            if (!SessionEndpoint.TryParse(_options.Address, out SessionEndpoint host))
+            {
+                return $"bad -tt-address '{_options.Address}'";
+            }
+
             // Хост может стартовать позже клиента: пробуем подключиться, пока не выйдет.
             float deadline = Time.realtimeSinceStartup + StepTimeout;
             SessionStartResult joined;
             do
             {
-                joined = await _launcher.JoinAsync(_options.Address);
+                joined = await _launcher.JoinAsync(host);
                 if (!joined.Success)
                 {
                     await UniTask.Delay(TimeSpan.FromSeconds(1), cancellationToken: token);
@@ -304,6 +385,11 @@ namespace TinyTumble.Bootstrap.Diagnostics
             }
 
             int ownSlot = OwnSlotIndex();
+            if (_options.Scenario == AutoTestScenario.PartyMove)
+            {
+                return await PartyMemberFollowsAsync(host.WithDefaultPort(7777), token);
+            }
+
             _lobby.SetLocalReady(true);
             Step($"in lobby as P{ownSlot + 1} and ready");
 
@@ -439,6 +525,429 @@ namespace TinyTumble.Bootstrap.Diagnostics
             Step($"back in lobby as P{ownSlot + 1}, leaving");
             await _flow.GoToAsync(GameState.MainMenu);
             return null;
+        }
+
+        // ---------- Поиск игры ----------
+
+        /// <summary>
+        /// Все копии ищут игру. Ждём, пока все окажутся в одной сессии, затем старта по сроку поиска: в матче все люди
+        /// и боты на пустых местах (сессия собрана поиском). Хост заканчивает матч, клиенты после итогов уходят.
+        /// </summary>
+        private async UniTask<string> RunMatchmakeAsync(CancellationToken token)
+        {
+            await WaitForState(GameState.MainMenu, token);
+            _matchmaking.SearchTimeoutOverride = _options.SearchSeconds;
+            if (!_matchmaking.StartSearch())
+            {
+                return $"could not start searching: available {_matchmaking.IsAvailable}";
+            }
+
+            int everyone = _options.Clients;
+            Step($"searching, expecting {everyone} players in one lobby");
+            if (!await WaitUntil(() => !_party.IsMoving && _session.Role.CurrentValue != SessionRole.None && CountConnectedPlayers() >= everyone, token))
+            {
+                return $"players did not meet: {CountConnectedPlayers()} of {everyone} in our session, search {_matchmaking.State}";
+            }
+
+            Step($"met {everyone} players as {(_session.IsHost ? "host" : "client")}, search {_matchmaking.State}, {_matchmaking.SecondsLeft:0} s to the match");
+            MatchEntryPoint match = await WaitForMatch(everyone, token);
+            if (match == null)
+            {
+                return "the match did not start when the search time was up";
+            }
+
+            int bots = match.Characters.Count - CountHumans(match);
+            int expectedBots = _lobby.Capacity - everyone;
+            if (bots != expectedBots || !_matchmaking.IsMatchmadeSession)
+            {
+                return $"expected {expectedBots} bot(s) in a matchmade match, got {bots}, matchmade {_matchmaking.IsMatchmadeSession}";
+            }
+
+            Step($"matchmade match: {everyone} players and {bots} bot(s)");
+            if (_session.IsHost)
+            {
+                await UniTask.Delay(TimeSpan.FromSeconds(3), cancellationToken: token);
+                _matchEnded.Publish(new MatchEnded(MatchEnded.NoWinner));
+                await WaitForState(GameState.Results, token);
+                await UniTask.Delay(TimeSpan.FromSeconds(1), cancellationToken: token);
+                await _flow.GoToAsync(GameState.Lobby);
+                await WaitForState(GameState.Lobby, token);
+                if (!await WaitUntil(() => CountConnectedRemoteSlots() == 0, token))
+                {
+                    return "clients did not leave";
+                }
+
+                return null;
+            }
+
+            await WaitForState(GameState.Results, token);
+            await WaitForState(GameState.Lobby, token);
+            Step("back in lobby, leaving");
+            await _flow.GoToAsync(GameState.MainMenu);
+            return null;
+        }
+
+        /// <summary>
+        /// Люди между матчами. Ранние копии находят друг друга и играют первый матч с ботами; лобби после матча снова
+        /// открывается, опоздавший (-tt-delay) нажимает «Найти игру» в меню, приходит на место бота, и второй матч идёт
+        /// с ним. В конце клиенты уходят в меню, и хост сразу освобождает их слоты: сессия собрана поиском.
+        /// </summary>
+        private async UniTask<string> RunLateJoinAsync(CancellationToken token)
+        {
+            await WaitForState(GameState.MainMenu, token);
+            bool late = _options.StartDelay > 0f;
+            if (late)
+            {
+                Step($"waiting {_options.StartDelay:0} s before searching");
+                await UniTask.Delay(TimeSpan.FromSeconds(_options.StartDelay), ignoreTimeScale: true, cancellationToken: token);
+            }
+
+            _matchmaking.SearchTimeoutOverride = _options.SearchSeconds;
+            var menu = Object.FindAnyObjectByType<MultiplayerMenuView>();
+            if (menu == null || !menu.PressFindGame() || _matchmaking.State == MatchmakingState.Idle)
+            {
+                return "the 'Find game' button in the menu did not start the search";
+            }
+
+            int everyone = _options.Clients;
+            if (late)
+            {
+                Step("searching late, the others should be between matches");
+                if (!await WaitUntil(() => !_party.IsMoving && _session.IsRemoteClient && CountConnectedPlayers() >= everyone, token))
+                {
+                    return $"did not join the others between matches: {CountConnectedPlayers()} in our session, search {_matchmaking.State}";
+                }
+
+                string late1 = await PlayMatchmadeMatchAsync(everyone, token);
+                if (late1 != null)
+                {
+                    return late1;
+                }
+
+                await _flow.GoToAsync(GameState.MainMenu);
+                return null;
+            }
+
+            int early = everyone - 1;
+            if (!await WaitUntil(() => !_party.IsMoving && _session.Role.CurrentValue != SessionRole.None && CountConnectedPlayers() >= early, token))
+            {
+                return $"early players did not meet: {CountConnectedPlayers()} of {early}";
+            }
+
+            if (_session.IsHost)
+            {
+                var panel = Object.FindAnyObjectByType<LobbyMatchmakingPanel>();
+                if (panel == null || string.IsNullOrEmpty(panel.Status) || !panel.IsCancelShown)
+                {
+                    return $"the lobby does not show the search: status '{(panel != null ? panel.Status : "no panel")}'";
+                }
+
+                Step($"lobby shows: {panel.Status}");
+            }
+
+            string first = await PlayMatchmadeMatchAsync(early, token);
+            if (first != null)
+            {
+                return first;
+            }
+
+            if (_session.IsHost && !await WaitUntil(() => _matchmaking.State == MatchmakingState.WaitingAsHost && _matchmaking.SecondsLeft >= 0f, token))
+            {
+                return $"the lobby did not reopen for new players after the match: search {_matchmaking.State}";
+            }
+
+            Step("back in the lobby, waiting for a late player");
+            if (!await WaitUntil(() => CountConnectedPlayers() >= everyone, token))
+            {
+                return $"the late player did not come: {CountConnectedPlayers()} of {everyone}";
+            }
+
+            string second = await PlayMatchmadeMatchAsync(everyone, token);
+            if (second != null)
+            {
+                return second;
+            }
+
+            if (!_session.IsHost)
+            {
+                await _flow.GoToAsync(GameState.MainMenu);
+                return null;
+            }
+
+            if (!await WaitUntil(() => CountConnectedRemoteSlots() == 0, token))
+            {
+                return "clients did not leave";
+            }
+
+            // Незнакомцы из поиска ушли сами: их места свободны сразу, а не держатся 60 с.
+            if (CountReservedSlots() != 0)
+            {
+                return "slots of strangers who left a matchmade session must be freed, not reserved";
+            }
+
+            Step("clients left, their slots are free");
+            return null;
+        }
+
+        /// <summary>Матч сессии, собранной поиском: humans людей, остальное — боты. Хост заканчивает его и ведёт всех в лобби.</summary>
+        private async UniTask<string> PlayMatchmadeMatchAsync(int humans, CancellationToken token)
+        {
+            MatchEntryPoint match = await WaitForMatch(humans, token);
+            if (match == null)
+            {
+                return $"the match for {humans} players did not start";
+            }
+
+            int bots = match.Characters.Count - CountHumans(match);
+            if (CountHumans(match) != humans || bots != _lobby.Capacity - humans)
+            {
+                return $"expected {humans} players and {_lobby.Capacity - humans} bot(s), got {CountHumans(match)} and {bots}";
+            }
+
+            Step($"matchmade match: {humans} players and {bots} bot(s)");
+            if (_session.IsHost)
+            {
+                await UniTask.Delay(TimeSpan.FromSeconds(3), cancellationToken: token);
+                _matchEnded.Publish(new MatchEnded(MatchEnded.NoWinner));
+                await WaitForState(GameState.Results, token);
+                await UniTask.Delay(TimeSpan.FromSeconds(1), cancellationToken: token);
+                await _flow.GoToAsync(GameState.Lobby);
+            }
+            else
+            {
+                await WaitForState(GameState.Results, token);
+            }
+
+            await WaitForState(GameState.Lobby, token);
+            return null;
+        }
+
+        // ---------- Пати ----------
+
+        /// <summary>
+        /// Хост-цель: к нему приходит чужая пати из двух машин — целиком и со своим лидером, — а потом уходит
+        /// к своему лидеру. Её слоты освобождаются сразу, а не держатся как за отвалившимися.
+        /// </summary>
+        private async UniTask<string> HostReceivesPartyAsync(CancellationToken token)
+        {
+            ulong ownParty = _party.PartyId;
+            Step($"waiting for a party of 2 (own party {ownParty:X})");
+            if (!await WaitUntil(() => CountConnectedInParty(ForeignParty(ownParty)) >= 2, token))
+            {
+                return $"the party did not arrive: {CountConnectedRemoteSlots()} remote players connected";
+            }
+
+            ulong guest = ForeignParty(ownParty);
+            if (!await WaitUntil(() => HasConnectedLeader(guest), token))
+            {
+                return "the arrived party has no connected leader";
+            }
+
+            if (!_party.IsLeader || _party.PartyId != ownParty)
+            {
+                return "the host's own party changed when a party arrived";
+            }
+
+            Step($"party {guest:X} arrived with its leader, waiting for it to leave");
+            if (!await WaitUntil(() => CountConnectedRemoteSlots() == 0, token))
+            {
+                return "the party did not leave";
+            }
+
+            if (CountReservedSlots() != 0)
+            {
+                return "slots of a party that left must be freed, not reserved";
+            }
+
+            Step("the party left, its slots are free");
+            return null;
+        }
+
+        /// <summary>
+        /// Лидер: хостит свою пати, дожидается участника, уводит пати к хосту-цели, а потом обратно к себе.
+        /// </summary>
+        private async UniTask<string> RunPartyLeaderAsync(CancellationToken token)
+        {
+            await WaitForState(GameState.MainMenu, token);
+            SessionStartResult hosted = await _launcher.HostAsync();
+            if (!hosted.Success)
+            {
+                return "host failed: " + hosted.Reason;
+            }
+
+            await WaitForState(GameState.Lobby, token);
+            _localPlayers.TryJoinDefault();
+            ulong party = _party.PartyId;
+            Step($"hosting party {party:X}, waiting for a member");
+            if (!await WaitUntil(() => CountConnectedInParty(party) >= 2, token))
+            {
+                return "the member did not join our party";
+            }
+
+            if (!SessionEndpoint.TryParse(_options.Target, out SessionEndpoint target))
+            {
+                return $"bad -tt-target '{_options.Target}'";
+            }
+
+            Step($"moving the party to {target}");
+            string moved = await MovePartyAsync(() => _party.MoveTo(target), token);
+            if (moved != null)
+            {
+                return moved;
+            }
+
+            if (!_session.IsRemoteClient || _party.PartyId != party || !_party.IsLeader)
+            {
+                return $"after the move: role {_session.Role.CurrentValue}, party {_party.PartyId:X} (was {party:X}), leader {_party.IsLeader}";
+            }
+
+            if (!await WaitUntil(() => CountConnectedInParty(party) >= 2 && CountConnectedPlayers() >= 3, token))
+            {
+                return $"the member did not follow: {CountConnectedInParty(party)} of the party with the new host";
+            }
+
+            Step("the whole party is at the new host, going home");
+            moved = await MovePartyAsync(() => _party.Regroup(), token);
+            if (moved != null)
+            {
+                return moved;
+            }
+
+            if (!_session.IsHost || _party.PartyId != party || !_party.IsLeader)
+            {
+                return $"after regrouping: role {_session.Role.CurrentValue}, party {_party.PartyId:X}, leader {_party.IsLeader}";
+            }
+
+            if (!await WaitUntil(() => CountConnectedInParty(party) >= 2, token))
+            {
+                return "the member did not come back to us";
+            }
+
+            Step("the party is back with us, waiting for the member to leave");
+            if (!await WaitUntil(() => CountConnectedRemoteSlots() == 0, token))
+            {
+                return "the member did not leave";
+            }
+
+            return null;
+        }
+
+        /// <summary>Участник: вступил в пати хоста, переезжает вместе с ней туда и обратно, в ней же и остаётся.</summary>
+        /// <param name="home">Хост, к которому мы подключались (лидер пати): к нему пати вернётся.</param>
+        private async UniTask<string> PartyMemberFollowsAsync(SessionEndpoint home, CancellationToken token)
+        {
+            ulong party = _party.PartyId;
+            // Состав здесь не проверяем: лидер может начать переезд сразу после нашего входа, и слоты уже пусты.
+            // Что лидер пати на месте, проверяет хост-цель.
+            if (_party.IsLeader)
+            {
+                return $"expected to be a member of the host's party, party {party:X}, leader {_party.IsLeader}";
+            }
+
+            Step($"member of party {party:X}, waiting for the move");
+            string moved = await WaitForMoveAsync(0, token);
+            if (moved != null)
+            {
+                return moved;
+            }
+
+            if (!_session.IsRemoteClient || _session.ServerEndpoint == home || _party.PartyId != party || _party.IsLeader)
+            {
+                return $"after the move: role {_session.Role.CurrentValue}, host {_session.ServerEndpoint}, party {_party.PartyId:X}";
+            }
+
+            Step($"moved with the party to {_session.ServerEndpoint}, waiting to go home");
+            moved = await WaitForMoveAsync(1, token);
+            if (moved != null)
+            {
+                return moved;
+            }
+
+            if (!_session.IsRemoteClient || _session.ServerEndpoint != home || _party.PartyId != party)
+            {
+                return $"after regrouping: role {_session.Role.CurrentValue}, host {_session.ServerEndpoint} (home {home}), party {_party.PartyId:X}";
+            }
+
+            await WaitForState(GameState.Lobby, token);
+            if (!await WaitUntil(() => OwnSlotIndex() >= 0, token))
+            {
+                return "no slot after regrouping";
+            }
+
+            Step("back home with the party leader, leaving");
+            await _flow.GoToAsync(GameState.MainMenu);
+            return null;
+        }
+
+        private async UniTask<string> MovePartyAsync(Func<bool> command, CancellationToken token)
+        {
+            int before = _party.CompletedMoves;
+            if (!command())
+            {
+                return "the party could not start moving";
+            }
+
+            return await WaitForMoveAsync(before, token);
+        }
+
+        private async UniTask<string> WaitForMoveAsync(int completedBefore, CancellationToken token)
+        {
+            if (!await WaitUntil(() => _party.CompletedMoves > completedBefore, token))
+            {
+                return "the party move did not finish";
+            }
+
+            if (_session.Role.CurrentValue == SessionRole.None)
+            {
+                return "the party move failed: " + _session.LastDisconnectReason;
+            }
+
+            await WaitForState(GameState.Lobby, token);
+            return null;
+        }
+
+        /// <summary>Пати, отличная от данной, у которой есть подключённые игроки (или 0).</summary>
+        private ulong ForeignParty(ulong ownParty)
+        {
+            IReadOnlyList<PlayerSlot> slots = _lobby.Slots;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                if (slots[i].IsConnected && slots[i].PartyId != ownParty)
+                {
+                    return slots[i].PartyId;
+                }
+            }
+
+            return 0;
+        }
+
+        private int CountConnectedInParty(ulong partyId)
+        {
+            int count = 0;
+            IReadOnlyList<PlayerSlot> slots = _lobby.Slots;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                if (partyId != 0 && slots[i].IsConnected && slots[i].PartyId == partyId)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private bool HasConnectedLeader(ulong partyId)
+        {
+            IReadOnlyList<PlayerSlot> slots = _lobby.Slots;
+            for (int i = 0; i < slots.Count; i++)
+            {
+                if (partyId != 0 && slots[i].IsConnected && slots[i].PartyId == partyId && slots[i].IsPartyLeader)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         // ---------- Слоты ----------

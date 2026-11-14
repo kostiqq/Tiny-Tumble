@@ -9,12 +9,15 @@ using TinyTumble.Core.Logging;
 using TinyTumble.Core.Network;
 using TinyTumble.Networking.Lobby;
 using TinyTumble.Networking.Session;
+using TinyTumble.Networking.Steam;
+using TinyTumble.Networking.Transport;
 using VContainer.Unity;
 
 namespace TinyTumble.Networking.Debugging
 {
     /// <summary>
-    /// Команды консоли для сети: net.host, net.join, net.leave, net.status, net.sim, net.drop.
+    /// Команды консоли для сети: net.host, net.join, net.invite, net.leave, net.status, net.sim, net.drop,
+    /// net.party.move, net.party.home, net.find, net.find.cancel.
     /// </summary>
     public sealed class NetworkDebugCommands : IStartable, IDisposable
     {
@@ -27,6 +30,12 @@ namespace TinyTumble.Networking.Debugging
         private readonly SessionLobby _lobby;
         private readonly IGameFlow _flow;
         private readonly NetworkSimulatorControl _simulator;
+        private readonly SessionTransports _transports;
+        private readonly NetworkSession _networkSession;
+        private readonly SteamService _steam;
+        private readonly ISessionInvites _invites;
+        private readonly IParty _party;
+        private readonly IMatchmaking _matchmaking;
         private readonly IGameLog _log;
         private readonly List<IDisposable> _registrations = new List<IDisposable>();
         private readonly StringBuilder _builder = new StringBuilder();
@@ -38,6 +47,12 @@ namespace TinyTumble.Networking.Debugging
             SessionLobby lobby,
             IGameFlow flow,
             NetworkSimulatorControl simulator,
+            SessionTransports transports,
+            NetworkSession networkSession,
+            SteamService steam,
+            ISessionInvites invites,
+            IParty party,
+            IMatchmaking matchmaking,
             IGameLog log)
         {
             _console = console;
@@ -46,17 +61,28 @@ namespace TinyTumble.Networking.Debugging
             _lobby = lobby;
             _flow = flow;
             _simulator = simulator;
+            _transports = transports;
+            _networkSession = networkSession;
+            _steam = steam;
+            _invites = invites;
+            _party = party;
+            _matchmaking = matchmaking;
             _log = log;
         }
 
         public void Start()
         {
-            _registrations.Add(_console.Register("net.host", "создать игру и перейти в лобби", OnHost));
-            _registrations.Add(_console.Register("net.join", "подключиться: net.join 192.168.0.10[:7777]", OnJoin));
+            _registrations.Add(_console.Register("net.host", "создать игру: net.host [auto|ip|steam] (по умолчанию auto — Steam, если запущен)", OnHost));
+            _registrations.Add(_console.Register("net.join", "подключиться: net.join 192.168.0.10[:7777] или net.join steam:<SteamID>", OnJoin));
+            _registrations.Add(_console.Register("net.invite", "пригласить друзей Steam (оверлей)", OnInvite));
             _registrations.Add(_console.Register("net.leave", "выйти из сессии в главное меню", OnLeave));
             _registrations.Add(_console.Register("net.status", "роль, игроки, симулятор", OnStatus));
             _registrations.Add(_console.Register("net.sim", "симулятор сети: net.sim <задержка мс> <джиттер мс> <потери %>; net.sim off", OnSim));
             _registrations.Add(_console.Register("net.drop", "оборвать связь в обе стороны: net.drop <секунды> (по умолчанию 8)", OnDrop));
+            _registrations.Add(_console.Register("net.party.move", "лидер уводит пати к другому хосту: net.party.move <ip[:port]> или steam:<SteamID>", OnPartyMove));
+            _registrations.Add(_console.Register("net.party.home", "лидер уводит пати из чужой сессии к себе", OnPartyHome));
+            _registrations.Add(_console.Register("net.find", "найти игру: из меню или лидером своей пати в своём лобби", OnFind));
+            _registrations.Add(_console.Register("net.find.cancel", "прекратить поиск игры", OnFindCancel));
         }
 
         public void Dispose()
@@ -71,12 +97,98 @@ namespace TinyTumble.Networking.Debugging
 
         private void OnHost(string arguments)
         {
+            if (!string.IsNullOrWhiteSpace(arguments))
+            {
+                if (!TryParseHostPreference(arguments, out HostTransportPreference preference))
+                {
+                    _log.Warning(LogTag, "Usage: net.host [auto|ip|steam]");
+                    return;
+                }
+
+                _transports.HostPreference = preference;
+            }
+
             _launcher.HostAsync().Forget();
+        }
+
+        private void OnInvite(string arguments)
+        {
+            if (!_invites.OpenInviteDialog())
+            {
+                _log.Warning(LogTag, _steam.IsReady
+                    ? "Nothing to invite to yet: host a game over Steam first (net.host steam)."
+                    : "Steam is not running: invites are unavailable.");
+            }
+        }
+
+        public static bool TryParseHostPreference(string text, out HostTransportPreference preference)
+        {
+            switch (text.Trim().ToLowerInvariant())
+            {
+                case "auto":
+                    preference = HostTransportPreference.Auto;
+                    return true;
+                case "ip":
+                    preference = HostTransportPreference.Ip;
+                    return true;
+                case "steam":
+                    preference = HostTransportPreference.Steam;
+                    return true;
+                default:
+                    preference = HostTransportPreference.Auto;
+                    return false;
+            }
         }
 
         private void OnJoin(string arguments)
         {
-            _launcher.JoinAsync(string.IsNullOrEmpty(arguments) ? "127.0.0.1" : arguments).Forget();
+            string text = string.IsNullOrEmpty(arguments) ? "127.0.0.1" : arguments;
+            if (!SessionEndpoint.TryParse(text, out SessionEndpoint host))
+            {
+                _log.Warning(LogTag, "Usage: net.join <ip[:port]> or net.join steam:<SteamID>");
+                return;
+            }
+
+            _launcher.JoinAsync(host).Forget();
+        }
+
+        private void OnPartyMove(string arguments)
+        {
+            if (string.IsNullOrWhiteSpace(arguments) || !SessionEndpoint.TryParse(arguments, out SessionEndpoint host))
+            {
+                _log.Warning(LogTag, "Usage: net.party.move <ip[:port]> or net.party.move steam:<SteamID>");
+                return;
+            }
+
+            if (!_party.MoveTo(host))
+            {
+                _log.Warning(LogTag, _party.IsLeader
+                    ? "The party cannot move now: only from the lobby of a running session."
+                    : "Only the party leader can move the party.");
+            }
+        }
+
+        private void OnPartyHome(string arguments)
+        {
+            if (!_party.Regroup())
+            {
+                _log.Warning(LogTag, "Nothing to do: only the leader of a party that is a guest in someone else's session can take it home.");
+            }
+        }
+
+        private void OnFind(string arguments)
+        {
+            if (!_matchmaking.StartSearch())
+            {
+                _log.Warning(LogTag, !_matchmaking.IsAvailable
+                    ? "Nowhere to search: Steam is not running (the local matchmaker works only in the editor and development builds over IP)."
+                    : "Cannot search now: only from the main menu, or as the party leader hosting a lobby with just your party.");
+            }
+        }
+
+        private void OnFindCancel(string arguments)
+        {
+            _matchmaking.Cancel();
         }
 
         private void OnLeave(string arguments)
@@ -89,7 +201,27 @@ namespace TinyTumble.Networking.Debugging
             _builder.Clear();
             _builder.Append("Role: ").Append(_session.Role.CurrentValue)
                 .Append(", client id: ").Append(_session.LocalClientId)
-                .Append(", host state: ").Append(_lobby.HostState);
+                .Append(", host state: ").Append(_lobby.HostState)
+                .Append(", transport: ").Append(_networkSession.TransportKind)
+                .Append(", host preference: ").Append(_transports.HostPreference)
+                .Append(", party: ").Append(_party.PartyId.ToString("X")).Append(_party.IsLeader ? " (leader)" : string.Empty)
+                .Append(", search: ").Append(_matchmaking.State);
+
+            float secondsLeft = _matchmaking.SecondsLeft;
+            if (secondsLeft >= 0f)
+            {
+                _builder.Append(", bots in ").Append(Math.Ceiling(secondsLeft)).Append(" s");
+            }
+
+            if (_matchmaking.IsMatchmadeSession)
+            {
+                _builder.Append(", matchmade");
+            }
+
+            if (_steam.IsReady)
+            {
+                _builder.Append(", Steam: ").Append(_steam.LocalSteamId).Append(_invites.CanInvite ? ", invites open" : string.Empty);
+            }
 
             if (_session.IsRecovering)
             {
@@ -109,7 +241,8 @@ namespace TinyTumble.Networking.Debugging
                     .Append(": client ").Append(slot.ClientId)
                     .Append(", local ").Append(slot.LocalIndex)
                     .Append(slot.IsConnected ? string.Empty : ", reserved")
-                    .Append(slot.IsReady ? ", ready" : string.Empty);
+                    .Append(slot.IsReady ? ", ready" : string.Empty)
+                    .Append(", party ").Append(slot.PartyId.ToString("X")).Append(slot.IsPartyLeader ? " (leader)" : string.Empty);
             }
 
             if (_simulator.IsEnabled)

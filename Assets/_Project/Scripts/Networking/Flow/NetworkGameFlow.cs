@@ -55,10 +55,11 @@ namespace TinyTumble.Networking.Flow
         {
             if (target == GameState.MainMenu || target == GameState.Boot)
             {
-                if (_session.IsHost && _lobby.AnnounceLeaving())
+                bool announced = _session.IsHost ? _lobby.AnnounceLeaving() : _session.IsRemoteClient && _lobby.AnnounceClientLeaving();
+                if (announced)
                 {
-                    // Даём сообщению «хост уходит» уйти в сеть до закрытия сессии: без него клиенты
-                    // сначала прождали бы возвращения хоста и только потом пошли к преемнику.
+                    // Даём сообщению «ухожу» уйти в сеть до закрытия сессии: без него клиенты сначала прождали бы
+                    // возвращения хоста, а хост держал бы слот ушедшего клиента как за отвалившимся.
                     await UniTask.Delay(TimeSpan.FromSeconds(LeaveAnnouncementDelay), ignoreTimeScale: true);
                 }
 

@@ -111,7 +111,7 @@ View и Presenter.
 | Сборка | Платформы | Ссылки |
 |---|---|---|
 | `TinyTumble.Editor` | только Editor | `Core`, `Infrastructure`, `Networking`, `Gameplay`, `AI`, `UI` + `UnityEditor` API. Валидатор арен, гизмо, инспекторы конфигов, тулзы. На `Bootstrap` не ссылается: тулзы не должны зависеть от того, как собраны скоупы. |
-| `TinyTumble.Tests.EditMode` | только Editor | `Core`, `Infrastructure`, `Networking`, `Gameplay`, `AI` + `Unity.Netcode.Runtime`, `UnityEngine.TestRunner`, `UnityEditor.TestRunner`, `nunit.framework.dll`. Логика правил, модификаторов, голосования, подсчёта очков; правила сессии (слоты, допуск, барьер загрузки, сетевой ввод). |
+| `TinyTumble.Tests.EditMode` | только Editor | `Core`, `Infrastructure`, `Networking`, `Gameplay`, `AI` + `Unity.Netcode.Runtime`, `Unity.Collections` (буферы `FastBufferWriter`/`Reader` для проверки сериализации), `UnityEngine.TestRunner`, `UnityEditor.TestRunner`, `nunit.framework.dll`. Логика правил, модификаторов, голосования, подсчёта очков; правила сессии (слоты, допуск, барьер загрузки, сетевой ввод). |
 | `TinyTumble.Tests.PlayMode` | все | всё, включая `Bootstrap` + `UnityEngine.TestRunner`, `nunit.framework.dll`. Smoke-тест матча с ботами. |
 
 ## Сводная таблица
