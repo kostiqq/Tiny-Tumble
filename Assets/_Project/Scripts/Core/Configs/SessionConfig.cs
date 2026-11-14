@@ -3,7 +3,8 @@ using UnityEngine;
 namespace TinyTumble.Core.Configs
 {
     /// <summary>
-    /// Параметры сети. Порт и таймауты; транспорт (прямой IP, позже Relay и Steam) выбирается кодом.
+    /// Параметры сети: порт, таймауты, поиск игры и синхронизация движения. Транспорт (прямой IP или Steam,
+    /// позже Relay) выбирается кодом по адресу хоста.
     /// </summary>
     [CreateAssetMenu(fileName = "SessionConfig", menuName = "Tiny Tumble/Configs/Session")]
     public sealed class SessionConfig : ScriptableObject

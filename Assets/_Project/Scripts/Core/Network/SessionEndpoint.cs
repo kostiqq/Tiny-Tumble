@@ -12,7 +12,7 @@ namespace TinyTumble.Core.Network
         /// <summary>IPv4 и порт, Unity Transport напрямую.</summary>
         Ip = 1,
 
-        /// <summary>SteamID хоста, транспорт на SteamNetworkingSockets (ещё не подключён).</summary>
+        /// <summary>SteamID хоста, транспорт на SteamNetworkingSockets через ретрансляцию Steam.</summary>
         Steam = 2,
     }
 
