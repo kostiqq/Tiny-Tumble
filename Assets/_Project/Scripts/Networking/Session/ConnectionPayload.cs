@@ -5,28 +5,46 @@ namespace TinyTumble.Networking.Session
 {
     /// <summary>
     /// Данные запроса на подключение (little-endian):
-    /// версия протокола (4) + число локальных игроков (1) + ключ игрока (8) + порт, на котором клиент
-    /// поднимет хост при миграции (2) + метка сессии, к которой он возвращается, или 0 (8).
+    /// версия протокола (4) + число локальных игроков (1) + ключ игрока (8)
+    /// + адрес преемника: тип (1), значение (8), порт (2) + метка сессии, к которой клиент возвращается, или 0 (8)
+    /// + пати: id (8), сколько слотов занимает вся пати (1), флаги (1: бит 0 — лидер, бит 1 — нашли поиском).
     /// </summary>
     public readonly struct ConnectionPayload
     {
-        private const int Size = 23;
+        private const int Size = 42;
+        private const byte LeaderFlag = 1;
+        private const byte MatchmadeFlag = 2;
 
         public readonly int ProtocolVersion;
         public readonly int LocalPlayerCount;
         public readonly ulong PlayerKey;
-        public readonly ushort HostPort;
+
+        /// <summary>
+        /// Как клиент сам видит свой адрес на случай, если станет хостом при миграции: SteamID для Steam,
+        /// для IP только порт (IP хост берёт из соединения). Хост проверяет его через транспорт.
+        /// </summary>
+        public readonly SessionEndpoint Successor;
 
         /// <summary>0 — новое подключение; иначе клиент восстанавливает именно эту сессию.</summary>
         public readonly ulong SessionToken;
 
-        public ConnectionPayload(int protocolVersion, int localPlayerCount, ulong playerKey, ushort hostPort, ulong sessionToken)
+        /// <summary>Пати, с которой клиент приходит. 0 — входит в пати хоста (друг по приглашению или адресу).</summary>
+        public readonly PartyTicket Party;
+
+        public ConnectionPayload(int protocolVersion, int localPlayerCount, ulong playerKey, SessionEndpoint successor, ulong sessionToken)
+            : this(protocolVersion, localPlayerCount, playerKey, successor, sessionToken, PartyTicket.JoinHostParty)
+        {
+        }
+
+        public ConnectionPayload(int protocolVersion, int localPlayerCount, ulong playerKey, SessionEndpoint successor, ulong sessionToken,
+            PartyTicket party)
         {
             ProtocolVersion = protocolVersion;
             LocalPlayerCount = localPlayerCount;
             PlayerKey = playerKey;
-            HostPort = hostPort;
+            Successor = successor;
             SessionToken = sessionToken;
+            Party = party;
         }
 
         public byte[] ToBytes()
@@ -35,9 +53,14 @@ namespace TinyTumble.Networking.Session
             WriteInt(bytes, 0, ProtocolVersion);
             bytes[4] = (byte)LocalPlayerCount;
             WriteULong(bytes, 5, PlayerKey);
-            bytes[13] = (byte)HostPort;
-            bytes[14] = (byte)(HostPort >> 8);
-            WriteULong(bytes, 15, SessionToken);
+            bytes[13] = (byte)Successor.Kind;
+            WriteULong(bytes, 14, Successor.Address);
+            bytes[22] = (byte)Successor.Port;
+            bytes[23] = (byte)(Successor.Port >> 8);
+            WriteULong(bytes, 24, SessionToken);
+            WriteULong(bytes, 32, Party.PartyId);
+            bytes[40] = (byte)Math.Min(Party.Size, byte.MaxValue);
+            bytes[41] = (byte)((Party.IsLeader ? LeaderFlag : 0) | (Party.IsMatchmade ? MatchmadeFlag : 0));
             return bytes;
         }
 
@@ -50,9 +73,22 @@ namespace TinyTumble.Networking.Session
             }
 
             int version = bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24);
-            ushort port = (ushort)(bytes[13] | (bytes[14] << 8));
-            payload = new ConnectionPayload(version, bytes[4], BitConverter.ToUInt64(bytes, 5), port, BitConverter.ToUInt64(bytes, 15));
+            ushort port = (ushort)(bytes[22] | (bytes[23] << 8));
+            SessionEndpoint successor = SessionEndpoint.FromRaw(bytes[13], ReadULong(bytes, 14), port);
+            var party = new PartyTicket(ReadULong(bytes, 32), bytes[40], (bytes[41] & LeaderFlag) != 0, (bytes[41] & MatchmadeFlag) != 0);
+            payload = new ConnectionPayload(version, bytes[4], ReadULong(bytes, 5), successor, ReadULong(bytes, 24), party);
             return true;
+        }
+
+        private static ulong ReadULong(byte[] bytes, int offset)
+        {
+            ulong value = 0;
+            for (int i = 0; i < 8; i++)
+            {
+                value |= (ulong)bytes[offset + i] << (8 * i);
+            }
+
+            return value;
         }
 
         private static void WriteInt(byte[] bytes, int offset, int value)
@@ -72,16 +108,61 @@ namespace TinyTumble.Networking.Session
         }
     }
 
+    /// <summary>С какой пати клиент подключается.</summary>
+    public readonly struct PartyTicket
+    {
+        /// <summary>0 — клиент входит в пати хоста.</summary>
+        public readonly ulong PartyId;
+
+        /// <summary>Сколько слотов займёт вся пати. Хост держит места под неё целиком, пока подключаются остальные.</summary>
+        public readonly int Size;
+
+        public readonly bool IsLeader;
+
+        /// <summary>Пати нашла это лобби поиском: пускать, только пока хост ищет игроков, и проверить пинг.</summary>
+        public readonly bool IsMatchmade;
+
+        public PartyTicket(ulong partyId, int size, bool isLeader, bool isMatchmade = false)
+        {
+            PartyId = partyId;
+            Size = size;
+            IsLeader = isLeader;
+            IsMatchmade = isMatchmade;
+        }
+
+        /// <summary>Друг подключается по приглашению или адресу и становится участником пати хоста.</summary>
+        public static PartyTicket JoinHostParty => default;
+    }
+
     /// <summary>
     /// Правила допуска клиента в сессию. Отдельно от NGO, чтобы проверять EditMode-тестами.
     /// </summary>
     public static class ConnectionAdmission
     {
-        /// <param name="sessionToken">Метка этой сессии.</param>
-        /// <param name="hasReservation">За этим игроком держится слот (он отвалился и вернулся).</param>
-        /// <returns>Пустая строка, если допущен, иначе код из <see cref="DisconnectReasons"/>.</returns>
+        /// <summary>Клиент приходит со своей пати, а не вступает в пати хоста.</summary>
+        public static bool IsForeignParty(in ConnectionPayload payload, ulong hostPartyId)
+        {
+            return payload.Party.PartyId != 0 && payload.Party.PartyId != hostPartyId;
+        }
+
+        /// <summary>Допуск без учёта пати (клиент вступает в пати хоста).</summary>
         public static string Evaluate(in ConnectionPayload payload, bool payloadValid, int protocolVersion, ulong sessionToken,
             bool hasReservation, int freeSlots, bool acceptingPlayers)
+        {
+            return Evaluate(payload, payloadValid, protocolVersion, sessionToken, hasReservation, freeSlots, acceptingPlayers, 0, 0, 0);
+        }
+
+        /// <param name="sessionToken">Метка этой сессии.</param>
+        /// <param name="hasReservation">За этим игроком держится слот (он отвалился и вернулся).</param>
+        /// <param name="freeSlots">Незанятые слоты (места, придержанные для пати, в них входят).</param>
+        /// <param name="hostPartyId">Пати хоста: клиенты с этим id или с 0 вступают в неё.</param>
+        /// <param name="heldForThisParty">Сколько мест хост уже держит для пати клиента (пришёл не первым).</param>
+        /// <param name="heldForOtherParties">Сколько мест хост держит для других подключающихся пати.</param>
+        /// <returns>Пустая строка, если допущен, иначе код из <see cref="DisconnectReasons"/>.</returns>
+        /// <param name="openForMatchmaking">Хост сейчас ищет игроков: пришедших по поиску пускаем только тогда.</param>
+        public static string Evaluate(in ConnectionPayload payload, bool payloadValid, int protocolVersion, ulong sessionToken,
+            bool hasReservation, int freeSlots, bool acceptingPlayers, ulong hostPartyId, int heldForThisParty, int heldForOtherParties,
+            bool openForMatchmaking = false)
         {
             if (!payloadValid || payload.ProtocolVersion != protocolVersion)
             {
@@ -105,11 +186,23 @@ namespace TinyTumble.Networking.Session
                 return DisconnectReasons.MatchInProgress;
             }
 
+            // Лобби нашли в списке, но хост уже не ищет: объявление устарело (матч начался, лобби закрыли).
+            if (payload.Party.IsMatchmade && !openForMatchmaking)
+            {
+                return DisconnectReasons.LobbyClosed;
+            }
+
             // Клиент без локальных игроков всё равно займёт слот: при входе он присоединяет клавиатуру.
             int requested = payload.LocalPlayerCount > 0 ? payload.LocalPlayerCount : 1;
-            if (requested > freeSlots)
+            int available = freeSlots - heldForOtherParties;
+
+            // Первый пришедший из чужой пати решает за всю пати: места нужны всем сразу, иначе часть пати
+            // войдёт, а остальным не хватит. Дальше хост держит эти места, пока подключаются остальные.
+            bool firstOfParty = IsForeignParty(payload, hostPartyId) && heldForThisParty <= 0;
+            int needed = firstOfParty ? Math.Max(requested, payload.Party.Size) : requested;
+            if (needed > available)
             {
-                return DisconnectReasons.LobbyFull;
+                return firstOfParty && payload.Party.Size > 1 ? DisconnectReasons.PartyTooBig : DisconnectReasons.LobbyFull;
             }
 
             return DisconnectReasons.None;

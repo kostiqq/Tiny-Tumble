@@ -10,6 +10,10 @@ namespace TinyTumble.UI
         public const string StartMatch = "Button_StartMatch";
         public const string Ready = "Button_Ready";
         public const string Leave = "Button_Leave";
+        public const string Invite = "Button_Invite";
+        public const string FindGame = "Button_FindGame";
+        public const string CancelSearch = "Button_CancelSearch";
+        public const string Regroup = "Button_Regroup";
         public const string EndMatch = "Button_EndMatch";
         public const string ToLobby = "Button_ToLobby";
     }

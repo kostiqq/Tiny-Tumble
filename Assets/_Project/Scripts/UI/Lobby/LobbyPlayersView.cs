@@ -9,7 +9,8 @@ using VContainer;
 namespace TinyTumble.UI.Lobby
 {
     /// <summary>
-    /// Слоты P1..P4 всей сессии: кто где сидит, чьи игроки на этой машине, кто готов. И подсказка, как войти.
+    /// Слоты P1..P4 всей сессии: кто где сидит, чьи игроки на этой машине, кто готов, кто лидер пати и кто
+    /// из другой пати (пришёл поиском или переездом). И подсказка, как войти.
     /// </summary>
     public sealed class LobbyPlayersView : MonoBehaviour
     {
@@ -21,18 +22,22 @@ namespace TinyTumble.UI.Lobby
         [SerializeField] private string _remoteTag = "игрок по сети";
         [SerializeField] private string _readyTag = "готов";
         [SerializeField] private string _reconnectingTag = "связь потеряна, ждём возвращения";
+        [SerializeField] private string _leaderTag = "лидер пати";
+        [SerializeField] private string _otherPartyTag = "другая пати";
 
         private readonly StringBuilder _builder = new StringBuilder();
         private ILobby _lobby;
         private ILocalPlayers _localPlayers;
         private INetworkSession _session;
+        private IParty _party;
 
         [Inject]
-        public void Construct(ILobby lobby, ILocalPlayers localPlayers, INetworkSession session)
+        public void Construct(ILobby lobby, ILocalPlayers localPlayers, INetworkSession session, IParty party)
         {
             _lobby = lobby;
             _localPlayers = localPlayers;
             _session = session;
+            _party = party;
             _lobby.Changed += Refresh;
             _localPlayers.PlayerJoined += OnPlayerJoined;
             Refresh();
@@ -94,6 +99,16 @@ namespace TinyTumble.UI.Lobby
                     {
                         _builder.Append(", ").Append(_readyTag);
                     }
+
+                    if (slot.IsPartyLeader && HasSeveralParties(slots))
+                    {
+                        _builder.Append(", ").Append(_leaderTag);
+                    }
+
+                    if (slot.PartyId != 0 && slot.PartyId != _party.PartyId)
+                    {
+                        _builder.Append(", ").Append(_otherPartyTag);
+                    }
                 }
                 else
                 {
@@ -104,6 +119,20 @@ namespace TinyTumble.UI.Lobby
             }
 
             _label.text = _builder.ToString();
+        }
+
+        /// <summary>Лидера помечаем, только когда в сессии больше одной пати: с одними друзьями это лишнее.</summary>
+        private static bool HasSeveralParties(IReadOnlyList<PlayerSlot> slots)
+        {
+            for (int i = 1; i < slots.Count; i++)
+            {
+                if (slots[i].PartyId != slots[0].PartyId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool TryGetSlot(IReadOnlyList<PlayerSlot> slots, int index, out PlayerSlot slot)

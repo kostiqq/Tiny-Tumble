@@ -1,5 +1,4 @@
 using System;
-using System.Net;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using R3;
@@ -9,25 +8,26 @@ using TinyTumble.Core.Logging;
 using TinyTumble.Core.Network;
 using TinyTumble.Networking.Lobby;
 using TinyTumble.Networking.Spawning;
+using TinyTumble.Networking.Transport;
 using Unity.Netcode;
 using UnityEngine;
 
 namespace TinyTumble.Networking.Session
 {
     /// <summary>
-    /// Сессия NGO поверх Unity Transport с прямым IP. Relay и Steam подключаются позже заменой настройки
-    /// транспорта; игровой код работает только с <see cref="INetworkSession"/>.
+    /// Сессия NGO. Как адресуется хост (IP, позже Steam и Relay), решает <see cref="ISessionTransport"/>;
+    /// игровой код работает только с <see cref="INetworkSession"/>.
     /// Обрыв связи у клиента не заканчивает сессию сразу: его получает <see cref="SessionRecovery"/>
     /// (переподключение или миграция хоста), и только если она не удалась — <see cref="ConnectionLost"/>.
     /// </summary>
     public sealed class NetworkSession : INetworkSession, IDisposable
     {
         private const string LogTag = "Net";
-        private const string ListenAllAddress = "0.0.0.0";
-        private const string LoopbackAddress = "127.0.0.1";
-        private const int ConnectAttemptIntervalMs = 1000;
+        private const float ConnectAttemptTimeout = 3f;
+        private const float RetryDelay = 0.5f;
 
         private readonly NetworkRuntime _runtime;
+        private readonly ISessionTransport _transport;
         private readonly NetworkPrefabRegistry _prefabs;
         private readonly SessionLobby _lobby;
         private readonly SessionConfig _config;
@@ -41,11 +41,11 @@ namespace TinyTumble.Networking.Session
         private bool _connecting;
         private bool _connectFinished;
         private string _connectFailure;
-        private string _serverIp;
-        private ushort _serverPort;
+        private SessionEndpoint _server;
 
         public NetworkSession(
             NetworkRuntime runtime,
+            ISessionTransport transport,
             NetworkPrefabRegistry prefabs,
             SessionLobby lobby,
             SessionConfig config,
@@ -55,6 +55,7 @@ namespace TinyTumble.Networking.Session
             IGameLog log)
         {
             _runtime = runtime;
+            _transport = transport;
             _prefabs = prefabs;
             _lobby = lobby;
             _config = config;
@@ -90,18 +91,33 @@ namespace TinyTumble.Networking.Session
         public string LastDisconnectReason { get; private set; } = DisconnectReasons.None;
 
         /// <summary>
-        /// Порт, на котором эта машина поднимает хост, в том числе став преемником. Сообщается хосту при
+        /// Порт, на котором эта машина поднимает хост по IP, в том числе став преемником. Сообщается хосту при
         /// подключении. По умолчанию из конфига; несколько копий игры на одной машине задают разные.
         /// </summary>
         public ushort HostPort { get; set; }
+
+        /// <summary>Через какой транспорт идёт текущая (или последняя) сессия: IP или Steam.</summary>
+        public EndpointKind TransportKind { get; private set; }
+
+        /// <summary>Клиент: адрес хоста, к которому мы подключены (или были до обрыва).</summary>
+        public SessionEndpoint ServerEndpoint => _server;
 
         public UniTask<SessionStartResult> StartHostAsync(CancellationToken cancellationToken)
         {
             return StartHostAsync(HostSeed.NewSession(NewSessionToken()), cancellationToken);
         }
 
-        /// <summary>Хост с заданным началом: новая игра или продолжение сессии после миграции.</summary>
-        public async UniTask<SessionStartResult> StartHostAsync(HostSeed seed, CancellationToken cancellationToken)
+        /// <summary>Новая сессия через заданный транспорт (пати собирается у лидера тем же транспортом, что и раньше).</summary>
+        public UniTask<SessionStartResult> StartHostAsync(EndpointKind kind, CancellationToken cancellationToken)
+        {
+            return StartHostAsync(HostSeed.NewSession(NewSessionToken()), cancellationToken, kind);
+        }
+
+        /// <summary>
+        /// Хост с заданным началом: новая игра или продолжение сессии после миграции.
+        /// kind None — транспорт выбирается сам: преемник берёт тот, через который шла сессия, новый хост — предпочтительный.
+        /// </summary>
+        public async UniTask<SessionStartResult> StartHostAsync(HostSeed seed, CancellationToken cancellationToken, EndpointKind kind = EndpointKind.None)
         {
             if (_role.Value != SessionRole.None || _connecting)
             {
@@ -114,10 +130,21 @@ namespace TinyTumble.Networking.Session
                 await PrepareAsync(cancellationToken);
 
                 NetworkManager manager = _runtime.Manager;
-                // Слушаем все интерфейсы: к хосту можно подключиться и из локальной сети.
-                _runtime.Transport.SetConnectionData(LoopbackAddress, HostPort, ListenAllAddress);
-                ConfigureTimeouts(_config.ConnectTimeout);
-                manager.NetworkConfig.ConnectionData = BuildPayload(0);
+                // Преемник поднимает хост тем же транспортом, через который шла сессия: план миграции
+                // разослал остальным адрес именно этого типа.
+                if (kind == EndpointKind.None)
+                {
+                    kind = seed.HasSlots && _server.IsValid ? _server.Kind : _transport.PreferredHostKind;
+                }
+
+                if (!_transport.TryConfigureHost(kind, HostPort))
+                {
+                    _log.Warning(LogTag, $"Cannot host over {kind}.");
+                    return SessionStartResult.Fail(DisconnectReasons.StartFailed);
+                }
+
+                _transport.ConfigureTimeouts(_config.ConnectTimeout, _config.DisconnectTimeout);
+                manager.NetworkConfig.ConnectionData = BuildPayload(0, PartyTicket.JoinHostParty);
                 Subscribe();
 
                 if (!manager.StartHost())
@@ -127,6 +154,7 @@ namespace TinyTumble.Networking.Session
                 }
 
                 LastDisconnectReason = DisconnectReasons.None;
+                TransportKind = kind;
                 _role.Value = SessionRole.Host;
                 _simulator.Apply(_runtime.Transport);
 
@@ -139,7 +167,8 @@ namespace TinyTumble.Networking.Session
                 }
 
                 _lobby.SpawnState(statePrefab, seed);
-                _log.Info(LogTag, seed.HasSlots ? $"Hosting on port {HostPort} as the new host of the session." : $"Hosting on port {HostPort}.");
+                string where = kind == EndpointKind.Ip ? "on port " + HostPort.ToString() : "over Steam";
+                _log.Info(LogTag, seed.HasSlots ? $"Hosting {where} as the new host of the session." : $"Hosting {where}.");
                 return SessionStartResult.Ok;
             }
             finally
@@ -148,24 +177,59 @@ namespace TinyTumble.Networking.Session
             }
         }
 
-        public UniTask<SessionStartResult> StartClientAsync(string address, CancellationToken cancellationToken)
+        /// <summary>Подключение из меню или по приглашению: клиент вступает в пати хоста.</summary>
+        public UniTask<SessionStartResult> StartClientAsync(SessionEndpoint host, CancellationToken cancellationToken)
         {
-            if (!TryParseAddress(address, _config.Port, out string ip, out ushort port))
+            return ConnectAsync(host.WithDefaultPort(_config.Port), _config.ConnectTimeout, 0, PartyTicket.JoinHostParty, cancellationToken);
+        }
+
+        /// <summary>
+        /// Повторяет попытки подключиться, пока не выйдет окно. Отказ хоста (сессия не та, нет мест)
+        /// и адрес, которого транспорт не понимает, прекращают попытки сразу.
+        /// </summary>
+        public async UniTask<SessionStartResult> ConnectWithRetriesAsync(SessionEndpoint host, float window, ulong sessionToken,
+            PartyTicket party, CancellationToken cancellationToken)
+        {
+            if (!host.IsValid)
             {
-                return UniTask.FromResult(SessionStartResult.Fail(DisconnectReasons.InvalidAddress));
+                return SessionStartResult.Fail(DisconnectReasons.InvalidAddress);
             }
 
-            return ConnectAsync(ip, port, _config.ConnectTimeout, 0, cancellationToken);
+            // По IP короткие попытки: хост ещё может не слушать порт, и UTP быстро получает отказ.
+            // Через Steam соединение ищет маршрут через ретрансляцию и само повторяет попытки, поэтому одна
+            // попытка на всё окно: обрывать её через 3 с значило бы никогда не дождаться соединения.
+            float attemptCap = host.Kind == EndpointKind.Steam ? window : ConnectAttemptTimeout;
+            float deadline = Time.realtimeSinceStartup + window;
+            SessionStartResult result = SessionStartResult.Fail(DisconnectReasons.ConnectFailed);
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                float attempt = Mathf.Min(attemptCap, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
+                result = await ConnectAsync(host, attempt, sessionToken, party, cancellationToken);
+                if (result.Success || DisconnectReasons.IsRejection(result.Reason) || result.Reason == DisconnectReasons.InvalidAddress)
+                {
+                    return result;
+                }
+
+                await UniTask.Delay(TimeSpan.FromSeconds(RetryDelay), ignoreTimeScale: true, cancellationToken: cancellationToken);
+            }
+
+            return result;
         }
 
         /// <summary>
         /// Подключение к хосту. sessionToken не 0 — возвращаемся в конкретную сессию (после обрыва или к преемнику).
         /// </summary>
-        public async UniTask<SessionStartResult> ConnectAsync(string ip, ushort port, float timeout, ulong sessionToken, CancellationToken cancellationToken)
+        public async UniTask<SessionStartResult> ConnectAsync(SessionEndpoint host, float timeout, ulong sessionToken, PartyTicket party,
+            CancellationToken cancellationToken)
         {
             if (_role.Value != SessionRole.None || _connecting)
             {
                 return SessionStartResult.Fail(DisconnectReasons.AlreadyRunning);
+            }
+
+            if (!_transport.Supports(host.Kind))
+            {
+                return SessionStartResult.Fail(DisconnectReasons.InvalidAddress);
             }
 
             _connecting = true;
@@ -174,9 +238,13 @@ namespace TinyTumble.Networking.Session
                 await PrepareAsync(cancellationToken);
 
                 NetworkManager manager = _runtime.Manager;
-                _runtime.Transport.SetConnectionData(ip, port);
-                ConfigureTimeouts(timeout);
-                manager.NetworkConfig.ConnectionData = BuildPayload(sessionToken);
+                if (!_transport.TryConfigureClient(host))
+                {
+                    return SessionStartResult.Fail(DisconnectReasons.InvalidAddress);
+                }
+
+                _transport.ConfigureTimeouts(timeout, _config.DisconnectTimeout);
+                manager.NetworkConfig.ConnectionData = BuildPayload(sessionToken, party);
                 _connectFinished = false;
                 _connectFailure = null;
                 Subscribe();
@@ -188,7 +256,7 @@ namespace TinyTumble.Networking.Session
                 }
 
                 _simulator.Apply(_runtime.Transport);
-                _log.Info(LogTag, $"Connecting to {ip}:{port}...");
+                _log.Info(LogTag, $"Connecting to {host}...");
 
                 float deadline = Time.realtimeSinceStartup + timeout;
                 while (!_connectFinished && Time.realtimeSinceStartup < deadline)
@@ -202,12 +270,12 @@ namespace TinyTumble.Networking.Session
                     StopManager();
                     _role.Value = SessionRole.None;
                     LastDisconnectReason = reason;
-                    _log.Info(LogTag, $"Connection to {ip}:{port} failed: {reason}.");
+                    _log.Info(LogTag, $"Connection to {host} failed: {reason}.");
                     return SessionStartResult.Fail(reason);
                 }
 
-                _serverIp = ip;
-                _serverPort = port;
+                _server = host;
+                TransportKind = host.Kind;
                 LastDisconnectReason = DisconnectReasons.None;
                 _log.Info(LogTag, $"Connected as client {manager.LocalClientId}.");
                 return SessionStartResult.Ok;
@@ -257,45 +325,6 @@ namespace TinyTumble.Networking.Session
             ConnectionLost?.Invoke(reason);
         }
 
-        /// <summary>
-        /// "1.2.3.4", "1.2.3.4:7778", "localhost". UTP принимает только IP-адреса, имена хостов не резолвим.
-        /// </summary>
-        public static bool TryParseAddress(string text, ushort defaultPort, out string ip, out ushort port)
-        {
-            ip = null;
-            port = defaultPort;
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                return false;
-            }
-
-            text = text.Trim();
-            string host = text;
-            int colon = text.LastIndexOf(':');
-            if (colon >= 0)
-            {
-                host = text.Substring(0, colon);
-                if (!ushort.TryParse(text.Substring(colon + 1), out port) || port == 0)
-                {
-                    return false;
-                }
-            }
-
-            if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase))
-            {
-                ip = LoopbackAddress;
-                return true;
-            }
-
-            if (!IPAddress.TryParse(host, out IPAddress parsed) || parsed.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork)
-            {
-                return false;
-            }
-
-            ip = parsed.ToString();
-            return true;
-        }
-
         private static ulong NewSessionToken()
         {
             byte[] bytes = Guid.NewGuid().ToByteArray();
@@ -315,21 +344,10 @@ namespace TinyTumble.Networking.Session
             await _prefabs.EnsureRegisteredAsync(cancellationToken);
         }
 
-        /// <summary>
-        /// По умолчанию UTP замечает обрыв через 30 с и пытается подключиться до минуты — для возврата
-        /// после обрыва и миграции это слишком долго.
-        /// </summary>
-        private void ConfigureTimeouts(float connectTimeout)
+        private byte[] BuildPayload(ulong sessionToken, PartyTicket party)
         {
-            var transport = _runtime.Transport;
-            transport.DisconnectTimeoutMS = Mathf.RoundToInt(_config.DisconnectTimeout * 1000f);
-            transport.ConnectTimeoutMS = ConnectAttemptIntervalMs;
-            transport.MaxConnectAttempts = Mathf.Max(1, Mathf.CeilToInt(connectTimeout * 1000f / ConnectAttemptIntervalMs));
-        }
-
-        private byte[] BuildPayload(ulong sessionToken)
-        {
-            return new ConnectionPayload(_config.ProtocolVersion, _localPlayers.Players.Count, _identity.Key, HostPort, sessionToken).ToBytes();
+            SessionEndpoint successor = _transport.GetLocalSuccessor(HostPort);
+            return new ConnectionPayload(_config.ProtocolVersion, _localPlayers.Players.Count, _identity.Key, successor, sessionToken, party).ToBytes();
         }
 
         private void Subscribe()
@@ -384,8 +402,10 @@ namespace TinyTumble.Networking.Session
             }
 
             bool valid = ConnectionPayload.TryParse(request.Payload, out ConnectionPayload payload);
+            _lobby.GetPartyHolds(valid ? payload.Party.PartyId : 0, out int heldForParty, out int heldForOthers);
             string reason = ConnectionAdmission.Evaluate(payload, valid, _config.ProtocolVersion, _lobby.SessionToken,
-                valid && _lobby.HasReservation(payload.PlayerKey), _lobby.FreeSlots, _lobby.IsAcceptingPlayers);
+                valid && _lobby.HasReservation(payload.PlayerKey), _lobby.FreeSlots, _lobby.IsAcceptingPlayers,
+                _lobby.HostPartyId, heldForParty, heldForOthers, _lobby.Matchmaking.Open);
             response.Approved = string.IsNullOrEmpty(reason);
             response.Reason = reason;
             if (response.Approved)
@@ -486,14 +506,14 @@ namespace TinyTumble.Networking.Session
             }
 
             EndClientSession();
-            var drop = new DropInfo(_serverIp, _serverPort);
+            var drop = new DropInfo(_server);
             if (Dropped == null)
             {
                 EndAfterFailedRecovery(DisconnectReasons.HostLeft);
                 return;
             }
 
-            _log.Warning(LogTag, $"Lost connection to the host {_serverIp}:{_serverPort}.");
+            _log.Warning(LogTag, $"Lost connection to the host {_server}.");
             Dropped.Invoke(drop);
         }
 
@@ -507,13 +527,11 @@ namespace TinyTumble.Networking.Session
     /// <summary>Куда клиент был подключён, когда связь пропала.</summary>
     public readonly struct DropInfo
     {
-        public readonly string HostIp;
-        public readonly ushort HostPort;
+        public readonly SessionEndpoint Host;
 
-        public DropInfo(string hostIp, ushort hostPort)
+        public DropInfo(SessionEndpoint host)
         {
-            HostIp = hostIp;
-            HostPort = hostPort;
+            Host = host;
         }
     }
 }

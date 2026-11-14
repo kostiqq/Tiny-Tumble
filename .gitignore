@@ -111,3 +111,11 @@ InitTestScene*.unity*
 # Локальные инструкции для Claude
 /[Aa]ssets/_claude/
 /[Aa]ssets/_claude.meta
+
+# Настройки Rider/IntelliJ: у каждого свои, Rider пересоздаёт их сам
+.idea/
+/[Aa]ssets/**/.idea/
+
+# Документация проекта: хранится локально, не в репозитории
+/[Aa]ssets/docs/
+/[Aa]ssets/docs.meta

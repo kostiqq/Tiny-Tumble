@@ -93,6 +93,13 @@ namespace TinyTumble.Networking.Session
         private void ApplyParameters(UnityTransport transport)
         {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
+            // Симулятор — слой Unity Transport. Через Steam его нет: драйвер UTP даже не создан.
+            if (_runtime.Manager.NetworkConfig.NetworkTransport != transport)
+            {
+                _log.Warning(LogTag, "Network simulator works only over IP (Unity Transport); the current session uses another transport.");
+                return;
+            }
+
             NetworkSimulatorParameter parameters = _parameters;
             if (_blackout)
             {

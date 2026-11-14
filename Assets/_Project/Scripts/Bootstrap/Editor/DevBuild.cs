@@ -19,6 +19,9 @@ namespace TinyTumble.Bootstrap.Editor
         private const string ExecutableName = "TinyTumble.exe";
         private const string OutputKey = "-tt-build-path";
 
+        // В корне проекта; без него сборка, запущенная не из Steam, не поднимет Steam API (App ID 480, Spacewar).
+        private const string SteamAppIdFile = "steam_appid.txt";
+
         [MenuItem("Tiny Tumble/Build/Windows Development")]
         public static void BuildWindows()
         {
@@ -59,6 +62,11 @@ namespace TinyTumble.Bootstrap.Editor
 
             BuildReport report = BuildPipeline.BuildPlayer(options);
             bool succeeded = report.summary.result == BuildResult.Succeeded;
+            if (succeeded && File.Exists(SteamAppIdFile))
+            {
+                File.Copy(SteamAppIdFile, Path.Combine(outputFolder, SteamAppIdFile), true);
+            }
+
             Debug.Log($"[Build] {report.summary.result}: {options.locationPathName}, {report.summary.totalErrors} errors.");
             return succeeded;
         }

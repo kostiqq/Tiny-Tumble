@@ -190,7 +190,9 @@ namespace TinyTumble.Gameplay.Match
                 }
             }
 
-            int total = connected + _setup.BotCount;
+            // Сессия собрана поиском игры: пустые места занимают боты. Иначе ботов столько, сколько выбрали в лобби.
+            int bots = _lobby.Matchmaking.Matchmade ? Mathf.Max(0, _lobby.Capacity - connected) : _setup.BotCount;
+            int total = connected + bots;
             int spawnIndex = 0;
 
             for (int i = 0; i < slots.Count; i++)
@@ -210,7 +212,7 @@ namespace TinyTumble.Gameplay.Match
                 _objects.Track(character.NetworkObject);
             }
 
-            for (int i = 0; i < _setup.BotCount; i++)
+            for (int i = 0; i < bots; i++)
             {
                 PlayerCharacter character = InstantiateCharacter(prefab, spawnIndex++, total);
                 int id = _roster.Add(isBot: true);

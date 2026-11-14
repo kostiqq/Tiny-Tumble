@@ -1,5 +1,7 @@
 using System;
 using TinyTumble.Core.Flow;
+using TinyTumble.Core.Network;
+using TinyTumble.Networking.Party;
 using Unity.Netcode;
 using VContainer;
 
@@ -7,13 +9,15 @@ namespace TinyTumble.Networking.Lobby
 {
     /// <summary>
     /// Сетевой объект сессии: живёт всю сессию поверх смены сцен и хранит то, что нужно опоздавшему клиенту,
-    /// — состав слотов, состояние игры хоста и план миграции хоста. Логики здесь нет: всё передаётся в <see cref="SessionLobby"/>.
+    /// — состав слотов, состояние игры хоста, план миграции хоста и состояние поиска игры. Логики здесь нет:
+    /// всё передаётся в <see cref="SessionLobby"/>.
     /// </summary>
     public sealed class SessionNetworkState : NetworkBehaviour
     {
         private readonly NetworkVariable<SlotTable> _slots = new NetworkVariable<SlotTable>();
         private readonly NetworkVariable<SessionPhase> _phase = new NetworkVariable<SessionPhase>();
         private readonly NetworkVariable<MigrationPlan> _plan = new NetworkVariable<MigrationPlan>();
+        private readonly NetworkVariable<MatchmakingInfo> _matchmaking = new NetworkVariable<MatchmakingInfo>();
 
         private SessionLobby _lobby;
 
@@ -22,6 +26,8 @@ namespace TinyTumble.Networking.Lobby
         public SessionPhase Phase => _phase.Value;
 
         public MigrationPlan Plan => _plan.Value;
+
+        public MatchmakingInfo Matchmaking => _matchmaking.Value;
 
         [Inject]
         public void Construct(SessionLobby lobby)
@@ -43,6 +49,7 @@ namespace TinyTumble.Networking.Lobby
             _slots.OnValueChanged += OnSlotsChanged;
             _phase.OnValueChanged += OnPhaseChanged;
             _plan.OnValueChanged += OnPlanChanged;
+            _matchmaking.OnValueChanged += OnMatchmakingChanged;
             _lobby.Attach(this);
         }
 
@@ -51,6 +58,7 @@ namespace TinyTumble.Networking.Lobby
             _slots.OnValueChanged -= OnSlotsChanged;
             _phase.OnValueChanged -= OnPhaseChanged;
             _plan.OnValueChanged -= OnPlanChanged;
+            _matchmaking.OnValueChanged -= OnMatchmakingChanged;
             if (_lobby != null)
             {
                 _lobby.Detach(this);
@@ -72,11 +80,59 @@ namespace TinyTumble.Networking.Lobby
             _plan.Value = plan;
         }
 
+        public void SetMatchmaking(MatchmakingInfo info)
+        {
+            _matchmaking.Value = info;
+        }
+
         /// <summary>Хост уходит сам: клиентам не нужно ждать его возвращения, сразу к преемнику.</summary>
         [Rpc(SendTo.NotServer)]
         public void HostLeavingRpc()
         {
             _lobby.OnHostLeaving();
+        }
+
+        /// <summary>Лидер пати просит хоста увести её. SessionEndpoint живёт в Core без NGO, поэтому идут его поля.</summary>
+        [Rpc(SendTo.Server)]
+        public void RequestPartyMoveRpc(byte kind, ulong address, ushort port, RpcParams rpcParams = default)
+        {
+            _lobby.OnPartyMoveRequested(rpcParams.Receive.SenderClientId, SessionEndpoint.FromRaw(kind, address, port));
+        }
+
+        /// <summary>Хост: пати переезжает. Получают все клиенты, выполняют участники этой пати.</summary>
+        [Rpc(SendTo.NotServer)]
+        public void PartyMoveRpc(ulong partyId, ulong leaderKey, byte partySize, byte kind, ulong address, ushort port,
+            byte leaderKind, ulong leaderAddress, ushort leaderPort, bool matchmade, byte reason)
+        {
+            SessionEndpoint target = SessionEndpoint.FromRaw(kind, address, port);
+            SessionEndpoint leader = SessionEndpoint.FromRaw(leaderKind, leaderAddress, leaderPort);
+            _lobby.OnPartyMove(new PartyMove(partyId, target, leaderKey, partySize, leader, matchmade, (PartyMoveReason)reason));
+        }
+
+        /// <summary>Хост меряет RTT до клиента: отправляет своё время, клиент сразу возвращает его.</summary>
+        [Rpc(SendTo.SpecifiedInParams)]
+        public void PingRpc(float hostTime, RpcParams rpcParams)
+        {
+            PongRpc(hostTime);
+        }
+
+        [Rpc(SendTo.Server)]
+        public void PongRpc(float hostTime, RpcParams rpcParams = default)
+        {
+            _lobby.OnPong(rpcParams.Receive.SenderClientId, hostTime);
+        }
+
+        /// <summary>Хост: отправить пинг одному клиенту.</summary>
+        public void SendPing(ulong clientId, float hostTime)
+        {
+            PingRpc(hostTime, RpcTarget.Single(clientId, RpcTargetUse.Temp));
+        }
+
+        /// <summary>Клиент уходит сам (в меню), а не теряет связь.</summary>
+        [Rpc(SendTo.Server)]
+        public void ClientLeavingRpc(RpcParams rpcParams = default)
+        {
+            _lobby.OnClientLeaving(rpcParams.Receive.SenderClientId);
         }
 
         [Rpc(SendTo.Server)]
@@ -110,6 +166,11 @@ namespace TinyTumble.Networking.Lobby
         private void OnPlanChanged(MigrationPlan previous, MigrationPlan current)
         {
             _lobby.OnPlanChanged(current);
+        }
+
+        private void OnMatchmakingChanged(MatchmakingInfo previous, MatchmakingInfo current)
+        {
+            _lobby.OnMatchmakingChanged(current);
         }
     }
 

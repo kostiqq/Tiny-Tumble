@@ -19,6 +19,15 @@ namespace TinyTumble.Core.Network
         /// <summary>По адресу отвечает чужая сессия (например, преемник уже начал новую игру).</summary>
         public const string SessionMismatch = "session_mismatch";
 
+        /// <summary>Пати целиком не помещается в лобби: пускать её по частям нельзя.</summary>
+        public const string PartyTooBig = "party_too_big";
+
+        /// <summary>Игру нашли поиском, а хост уже не ищет игроков (начал матч или закрыл лобби).</summary>
+        public const string LobbyClosed = "lobby_closed";
+
+        /// <summary>Пинг до хоста стабильно выше предела: пати возвращается к лидеру и ищет дальше.</summary>
+        public const string HighPing = "high_ping";
+
         /// <summary>
         /// Наш ли это код. NGO при обрыве кладёт в причину свой текст на английском — его в UI не показываем.
         /// </summary>
@@ -36,6 +45,9 @@ namespace TinyTumble.Core.Network
                 case AlreadyRunning:
                 case StartFailed:
                 case SessionMismatch:
+                case PartyTooBig:
+                case LobbyClosed:
+                case HighPing:
                     return true;
                 default:
                     return false;
@@ -54,6 +66,9 @@ namespace TinyTumble.Core.Network
                 case MatchInProgress:
                 case LoadTimeout:
                 case SessionMismatch:
+                case PartyTooBig:
+                case LobbyClosed:
+                case HighPing:
                     return true;
                 default:
                     return false;

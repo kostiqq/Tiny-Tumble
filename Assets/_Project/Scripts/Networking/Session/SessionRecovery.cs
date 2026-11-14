@@ -8,7 +8,7 @@ using TinyTumble.Core.Logging;
 using TinyTumble.Core.Network;
 using TinyTumble.Core.Scenes;
 using TinyTumble.Networking.Lobby;
-using UnityEngine;
+using TinyTumble.Networking.Party;
 using VContainer.Unity;
 
 namespace TinyTumble.Networking.Session
@@ -24,12 +24,12 @@ namespace TinyTumble.Networking.Session
     public sealed class SessionRecovery : IInitializable, IDisposable
     {
         private const string LogTag = "Net";
-        private const float ConnectAttemptTimeout = 3f;
-        private const float RetryDelay = 0.5f;
 
         private readonly NetworkSession _session;
         private readonly SessionLobby _lobby;
         private readonly PlayerIdentity _identity;
+        private readonly PartyState _party;
+        private readonly PartyService _partyService;
         private readonly IGameFlow _flow;
         private readonly ILoadingScreen _loadingScreen;
         private readonly SessionConfig _config;
@@ -40,6 +40,8 @@ namespace TinyTumble.Networking.Session
             NetworkSession session,
             SessionLobby lobby,
             PlayerIdentity identity,
+            PartyState party,
+            PartyService partyService,
             IGameFlow flow,
             ILoadingScreen loadingScreen,
             SessionConfig config,
@@ -48,6 +50,8 @@ namespace TinyTumble.Networking.Session
             _session = session;
             _lobby = lobby;
             _identity = identity;
+            _party = party;
+            _partyService = partyService;
             _flow = flow;
             _loadingScreen = loadingScreen;
             _config = config;
@@ -69,6 +73,12 @@ namespace TinyTumble.Networking.Session
 
         private void OnDropped(DropInfo drop)
         {
+            // Пати уезжает: старый хост пропал, потому что мы сами уходим. Подключение ведёт PartyService.
+            if (_partyService.IsMoving)
+            {
+                return;
+            }
+
             Cancel();
             _recovery = new CancellationTokenSource();
             RecoverAsync(drop, _recovery.Token).Forget();
@@ -97,7 +107,7 @@ namespace TinyTumble.Networking.Session
                 if (!hostLeft)
                 {
                     _log.Info(LogTag, "Trying to get back to the host...");
-                    if (await TryConnectAsync(drop.HostIp, drop.HostPort, plan.SessionToken, _config.ReconnectWindow, token))
+                    if (await TryConnectAsync(drop.Host, plan.SessionToken, _config.ReconnectWindow, token))
                     {
                         _log.Info(LogTag, "Reconnected to the host.");
                         return;
@@ -118,8 +128,14 @@ namespace TinyTumble.Networking.Session
                         break;
                     }
 
-                    _log.Info(LogTag, $"Looking for the new host at {step.Address}:{step.Port}...");
-                    if (await TryConnectAsync(step.Address, step.Port, plan.SessionToken, _config.MigrationConnectTimeout, token))
+                    if (!step.Host.IsValid)
+                    {
+                        _log.Info(LogTag, "The next candidate is unreachable, skipping it.");
+                        continue;
+                    }
+
+                    _log.Info(LogTag, $"Looking for the new host at {step.Host}...");
+                    if (await TryConnectAsync(step.Host, plan.SessionToken, _config.MigrationConnectTimeout, token))
                     {
                         _log.Info(LogTag, "Joined the new host.");
                         return;
@@ -142,7 +158,7 @@ namespace TinyTumble.Networking.Session
         private async UniTask<bool> BecomeHostAsync(ulong sessionToken, SlotTable slots, CancellationToken token)
         {
             _log.Info(LogTag, "We are next in line: becoming the host.");
-            SessionStartResult result = await _session.StartHostAsync(HostSeed.Migrated(sessionToken, slots), token);
+            SessionStartResult result = await _session.StartHostAsync(HostSeed.Migrated(sessionToken, slots, _lobby.LastKnownMatchmaking), token);
             if (!result.Success)
             {
                 _log.Warning(LogTag, $"Could not become the host: {result.Reason}.");
@@ -155,33 +171,21 @@ namespace TinyTumble.Networking.Session
         }
 
         /// <summary>Повторяет попытки до конца окна. Отказ хоста (сессия не та, нет мест) прекращает попытки сразу.</summary>
-        private async UniTask<bool> TryConnectAsync(string ip, ushort port, ulong sessionToken, float window, CancellationToken token)
+        private async UniTask<bool> TryConnectAsync(SessionEndpoint host, ulong sessionToken, float window, CancellationToken token)
         {
-            if (string.IsNullOrEmpty(ip) || port == 0)
+            if (!host.IsValid)
             {
                 return false;
             }
 
-            float deadline = Time.realtimeSinceStartup + window;
-            while (Time.realtimeSinceStartup < deadline)
+            // Возвращаемся со своей пати: если слот за нами уже не держат, хост примет нас как пришедшую пати.
+            SessionStartResult result = await _session.ConnectWithRetriesAsync(host, window, sessionToken, _party.Ticket(0), token);
+            if (!result.Success && DisconnectReasons.IsRejection(result.Reason))
             {
-                float attempt = Mathf.Min(ConnectAttemptTimeout, Mathf.Max(0.5f, deadline - Time.realtimeSinceStartup));
-                SessionStartResult result = await _session.ConnectAsync(ip, port, attempt, sessionToken, token);
-                if (result.Success)
-                {
-                    return true;
-                }
-
-                if (DisconnectReasons.IsRejection(result.Reason))
-                {
-                    _log.Info(LogTag, $"{ip}:{port} refused us: {result.Reason}.");
-                    return false;
-                }
-
-                await UniTask.Delay(TimeSpan.FromSeconds(RetryDelay), ignoreTimeScale: true, cancellationToken: token);
+                _log.Info(LogTag, $"{host} refused us: {result.Reason}.");
             }
 
-            return false;
+            return result.Success;
         }
 
         /// <summary>
@@ -196,11 +200,11 @@ namespace TinyTumble.Networking.Session
                 MigrationCandidate candidate = plan[i];
                 if (candidate.PlayerKey == ownKey)
                 {
-                    steps.Add(RecoveryStep.Host());
+                    steps.Add(RecoveryStep.BecomeHostStep());
                     break;
                 }
 
-                steps.Add(RecoveryStep.Connect(candidate.Address, candidate.Port));
+                steps.Add(RecoveryStep.Connect(candidate.Endpoint));
             }
 
             return steps;
@@ -210,24 +214,24 @@ namespace TinyTumble.Networking.Session
     public readonly struct RecoveryStep
     {
         public readonly bool BecomeHost;
-        public readonly string Address;
-        public readonly ushort Port;
 
-        private RecoveryStep(bool becomeHost, string address, ushort port)
+        /// <summary>К кому подключаться, если не BecomeHost. None — кандидат недостижим, шаг пропускается.</summary>
+        public readonly SessionEndpoint Host;
+
+        private RecoveryStep(bool becomeHost, SessionEndpoint host)
         {
             BecomeHost = becomeHost;
-            Address = address;
-            Port = port;
+            Host = host;
         }
 
-        public static RecoveryStep Host()
+        public static RecoveryStep BecomeHostStep()
         {
-            return new RecoveryStep(true, null, 0);
+            return new RecoveryStep(true, SessionEndpoint.None);
         }
 
-        public static RecoveryStep Connect(string address, ushort port)
+        public static RecoveryStep Connect(SessionEndpoint host)
         {
-            return new RecoveryStep(false, address, port);
+            return new RecoveryStep(false, host);
         }
     }
 }

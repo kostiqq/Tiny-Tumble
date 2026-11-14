@@ -11,6 +11,6 @@ namespace TinyTumble.Core.Network
 
         UniTask<SessionStartResult> HostAsync();
 
-        UniTask<SessionStartResult> JoinAsync(string address);
+        UniTask<SessionStartResult> JoinAsync(SessionEndpoint host);
     }
 }
