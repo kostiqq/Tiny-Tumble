@@ -96,7 +96,6 @@ namespace TinyTumble.Bootstrap.Editor
         private static readonly Color s_loadingBackground = new Color(0.08f, 0.07f, 0.10f, 1f);
         private static readonly Color s_faceColor = new Color(0.12f, 0.12f, 0.14f);
         private static readonly Color s_itemColor = new Color(0.55f, 0.80f, 0.95f);
-        private static readonly Vector3 s_cameraOffset = new Vector3(0f, 11f, -10f);
 
         [MenuItem("Tiny Tumble/Setup/Generate Project Assets")]
         public static void Run()
@@ -126,6 +125,7 @@ namespace TinyTumble.Bootstrap.Editor
             var botConfig = EnsureAsset<BotConfig>(ConfigsFolder + "/BotConfig.asset");
             var sessionConfig = EnsureAsset<SessionConfig>(ConfigsFolder + "/SessionConfig.asset");
             var inputConfig = EnsureAsset<InputConfig>(ConfigsFolder + "/InputConfig.asset");
+            var cameraConfig = EnsureAsset<CameraConfig>(ConfigsFolder + "/CameraConfig.asset");
 
             Material arenaMaterial = EnsureLitMaterial(ArenaMaterialPath, s_tableColor);
             Material characterMaterial = EnsureLitMaterial(CharacterMaterialPath, Color.white);
@@ -134,7 +134,7 @@ namespace TinyTumble.Bootstrap.Editor
             PhysicsMaterial characterPhysics = EnsureCharacterPhysics();
 
             NetworkManager networkManagerPrefab = CreateNetworkManagerPrefab();
-            RootLifetimeScope rootPrefab = CreateRootPrefab(matchConfig, characterConfig, combatConfig, botConfig, sessionConfig, inputConfig, networkManagerPrefab);
+            RootLifetimeScope rootPrefab = CreateRootPrefab(matchConfig, characterConfig, combatConfig, botConfig, sessionConfig, inputConfig, cameraConfig, networkManagerPrefab);
             SetupVContainerSettings(rootPrefab);
 
             CreateSessionPrefab();
@@ -152,7 +152,7 @@ namespace TinyTumble.Bootstrap.Editor
             SetupBootScene();
             SetupMainMenuScene();
             SetupLobbyScene();
-            SetupMatchScene(hitBurst);
+            SetupMatchScene(hitBurst, cameraConfig);
             SetupResultsScene();
             SetupBuildSettings();
 
@@ -335,6 +335,7 @@ namespace TinyTumble.Bootstrap.Editor
             BotConfig botConfig,
             SessionConfig sessionConfig,
             InputConfig inputConfig,
+            CameraConfig cameraConfig,
             NetworkManager networkManagerPrefab)
         {
             var root = new GameObject("RootLifetimeScope");
@@ -361,6 +362,7 @@ namespace TinyTumble.Bootstrap.Editor
                 serialized.FindProperty("_botConfig").objectReferenceValue = botConfig;
                 serialized.FindProperty("_sessionConfig").objectReferenceValue = sessionConfig;
                 serialized.FindProperty("_inputConfig").objectReferenceValue = inputConfig;
+                serialized.FindProperty("_cameraConfig").objectReferenceValue = cameraConfig;
                 serialized.FindProperty("_networkManagerPrefab").objectReferenceValue = networkManagerPrefab;
                 serialized.FindProperty("_loadingScreen").objectReferenceValue = loadingScreen;
                 serialized.FindProperty("_debugConsoleView").objectReferenceValue = console;
@@ -828,21 +830,23 @@ namespace TinyTumble.Bootstrap.Editor
             EditorSceneManager.SaveScene(scene);
         }
 
-        private static void SetupMatchScene(ParticleSystem hitBurst)
+        private static void SetupMatchScene(ParticleSystem hitBurst, CameraConfig cameraConfig)
         {
             Scene scene = OpenOrCreateScene(SceneNames.Match);
 
             Camera camera = FindMainCamera(scene);
+            CinemachineBrain brain = null;
             if (camera != null)
             {
-                camera.transform.SetPositionAndRotation(s_cameraOffset, Quaternion.Euler(48f, 0f, 0f));
-                if (camera.GetComponent<CinemachineBrain>() == null)
+                camera.transform.SetPositionAndRotation(cameraConfig.SharedOffset, Quaternion.Euler(48f, 0f, 0f));
+                brain = camera.GetComponent<CinemachineBrain>();
+                if (brain == null)
                 {
-                    camera.gameObject.AddComponent<CinemachineBrain>();
+                    brain = camera.gameObject.AddComponent<CinemachineBrain>();
                 }
             }
 
-            GameObject match = CreateMatchRig(hitBurst);
+            GameObject match = CreateMatchRig(hitBurst, cameraConfig, brain);
 
             GameObject ui = CreateUiRoot();
             Button button = CreateButton(ui.transform, ButtonNames.EndMatch, "Завершить матч");
@@ -865,11 +869,14 @@ namespace TinyTumble.Bootstrap.Editor
         }
 
         /// <summary>
-        /// Общая камера (Target Group + кадрирование группы + приём тряски) и «сочность» попаданий.
+        /// Камеры матча: за игроком (позу задаёт MatchCamera) и общая (Target Group + кадрирование группы),
+        /// обе принимают тряску; плюс «сочность» попаданий. Числа камер — в CameraConfig, MatchCamera применяет их
+        /// при старте, здесь они нужны только для вида сцены в редакторе.
         /// </summary>
-        private static GameObject CreateMatchRig(ParticleSystem hitBurst)
+        private static GameObject CreateMatchRig(ParticleSystem hitBurst, CameraConfig cameraConfig, CinemachineBrain brain)
         {
             var root = new GameObject(MatchObjectName);
+            Vector3 sharedOffset = cameraConfig.SharedOffset;
 
             var anchor = new GameObject("TableAnchor");
             anchor.transform.SetParent(root.transform, false);
@@ -878,34 +885,54 @@ namespace TinyTumble.Bootstrap.Editor
             groupObject.transform.SetParent(root.transform, false);
             var group = groupObject.AddComponent<CinemachineTargetGroup>();
             // Центр стола в группе: камера не наезжает вплотную, даже если все игроки сбились в кучу.
-            group.Targets.Add(new CinemachineTargetGroup.Target { Object = anchor.transform, Weight = 0.6f, Radius = 4f });
+            group.Targets.Add(new CinemachineTargetGroup.Target
+            {
+                Object = anchor.transform, Weight = cameraConfig.SharedTableWeight, Radius = cameraConfig.SharedTableRadius,
+            });
 
-            var cameraObject = new GameObject("MatchCamera");
-            cameraObject.transform.SetParent(root.transform, false);
-            cameraObject.transform.SetPositionAndRotation(s_cameraOffset, Quaternion.Euler(48f, 0f, 0f));
-            var virtualCamera = cameraObject.AddComponent<CinemachineCamera>();
-            virtualCamera.Target.TrackingTarget = groupObject.transform;
-            LensSettings lens = virtualCamera.Lens;
-            lens.FieldOfView = 50f;
-            virtualCamera.Lens = lens;
+            var sharedObject = new GameObject("SharedCamera");
+            sharedObject.transform.SetParent(root.transform, false);
+            sharedObject.transform.SetPositionAndRotation(sharedOffset, Quaternion.Euler(48f, 0f, 0f));
+            var sharedCamera = sharedObject.AddComponent<CinemachineCamera>();
+            sharedCamera.Target.TrackingTarget = groupObject.transform;
+            LensSettings lens = sharedCamera.Lens;
+            lens.FieldOfView = cameraConfig.SharedFieldOfView;
+            sharedCamera.Lens = lens;
 
-            var follow = cameraObject.AddComponent<CinemachineFollow>();
-            follow.FollowOffset = s_cameraOffset;
+            var follow = sharedObject.AddComponent<CinemachineFollow>();
+            follow.FollowOffset = sharedOffset;
             TrackerSettings tracker = follow.TrackerSettings;
             tracker.BindingMode = BindingMode.WorldSpace;
             follow.TrackerSettings = tracker;
-            cameraObject.AddComponent<CinemachineRotationComposer>();
+            sharedObject.AddComponent<CinemachineRotationComposer>();
 
-            var framing = cameraObject.AddComponent<CinemachineGroupFraming>();
-            framing.FramingSize = 0.7f;
+            var framing = sharedObject.AddComponent<CinemachineGroupFraming>();
+            framing.FramingSize = cameraConfig.SharedFramingSize;
             framing.SizeAdjustment = CinemachineGroupFraming.SizeAdjustmentModes.DollyOnly;
-            framing.DollyRange = new Vector2(-6f, 4f);
-            framing.Damping = 1.5f;
-            cameraObject.AddComponent<CinemachineImpulseListener>();
+            framing.DollyRange = cameraConfig.SharedDollyRange;
+            framing.Damping = cameraConfig.SharedDamping;
+            sharedObject.AddComponent<CinemachineImpulseListener>();
+
+            // Без компонентов Body/Aim: Cinemachine берёт позу из трансформа, а его двигает MatchCamera.
+            var followObject = new GameObject("FollowCamera");
+            followObject.transform.SetParent(root.transform, false);
+            followObject.transform.SetPositionAndRotation(sharedOffset, Quaternion.Euler(48f, 0f, 0f));
+            var followCamera = followObject.AddComponent<CinemachineCamera>();
+            LensSettings followLens = followCamera.Lens;
+            followLens.FieldOfView = cameraConfig.FollowFieldOfView;
+            followLens.NearClipPlane = cameraConfig.NearClipPlane;
+            followCamera.Lens = followLens;
+            followObject.AddComponent<CinemachineImpulseListener>();
 
             var matchCamera = root.AddComponent<MatchCamera>();
             var serialized = new SerializedObject(matchCamera);
             serialized.FindProperty("_group").objectReferenceValue = group;
+            serialized.FindProperty("_tableAnchor").objectReferenceValue = anchor.transform;
+            serialized.FindProperty("_sharedCamera").objectReferenceValue = sharedCamera;
+            serialized.FindProperty("_sharedFollow").objectReferenceValue = follow;
+            serialized.FindProperty("_sharedFraming").objectReferenceValue = framing;
+            serialized.FindProperty("_followCamera").objectReferenceValue = followCamera;
+            serialized.FindProperty("_brain").objectReferenceValue = brain;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
             var feedbackObject = new GameObject("CombatFeedback");

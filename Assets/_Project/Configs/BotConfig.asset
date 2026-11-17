@@ -17,7 +17,7 @@ MonoBehaviour:
   _maxRetargetInterval: 3.5
   _arriveDistance: 0.4
   _aggressionDelay: 2.5
-  _aggroRange: 8
+  _aggroRange: 0
   _pushRange: 1.1
   _dashRange: 3
   _dashChance: 0.25

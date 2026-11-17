@@ -4,6 +4,7 @@ using R3;
 using TinyTumble.Core.Configs;
 using TinyTumble.Core.Input;
 using TinyTumble.Core.Messages;
+using TinyTumble.Gameplay.Cameras;
 using TinyTumble.Gameplay.Combat;
 using TinyTumble.Gameplay.Match;
 using TinyTumble.Networking.Input;
@@ -49,6 +50,7 @@ namespace TinyTumble.Gameplay.Characters
         private MatchSetup _matchSetup;
         private ILocalPlayers _localPlayers;
         private MatchCharacters _characters;
+        private CameraMoveFrame _moveFrame;
         private IPublisher<CharacterHit> _hitPublisher;
 
         private CharacterMotor _motor;
@@ -141,6 +143,7 @@ namespace TinyTumble.Gameplay.Characters
             MatchSetup matchSetup,
             ILocalPlayers localPlayers,
             MatchCharacters characters,
+            CameraMoveFrame moveFrame,
             IPublisher<CharacterHit> hitPublisher)
         {
             _characterConfig = characterConfig;
@@ -149,6 +152,7 @@ namespace TinyTumble.Gameplay.Characters
             _matchSetup = matchSetup;
             _localPlayers = localPlayers;
             _characters = characters;
+            _moveFrame = moveFrame;
             _hitPublisher = hitPublisher;
             _motor = new CharacterMotor(_rigidbody, characterConfig);
             _combat = new CharacterCombat(this, combatConfig);
@@ -948,7 +952,8 @@ namespace TinyTumble.Gameplay.Characters
             {
                 if (players[i].Index == localIndex)
                 {
-                    _localSource = players[i].Input;
+                    // Стик поворачиваем на угол камеры до отправки: хост получает направление в осях стола.
+                    _localSource = CameraRelativeInput.Wrap(players[i].Input, _moveFrame);
                     return;
                 }
             }

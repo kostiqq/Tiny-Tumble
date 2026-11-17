@@ -26,11 +26,12 @@ namespace TinyTumble.Core.Input
 
     public sealed class LocalPlayer
     {
-        public LocalPlayer(int index, string deviceName, IPlayerInput input)
+        public LocalPlayer(int index, string deviceName, IPlayerInput input, IPlayerLookInput look = null)
         {
             Index = index;
             DeviceName = deviceName;
             Input = input;
+            Look = look;
         }
 
         /// <summary>0..3, соответствует P1..P4.</summary>
@@ -39,5 +40,8 @@ namespace TinyTumble.Core.Input
         public string DeviceName { get; }
 
         public IPlayerInput Input { get; }
+
+        /// <summary>Управление камерой; null — у игрока нет камеры (тесты).</summary>
+        public IPlayerLookInput Look { get; }
     }
 }
