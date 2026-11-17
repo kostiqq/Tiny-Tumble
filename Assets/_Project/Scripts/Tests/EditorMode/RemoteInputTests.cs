@@ -38,14 +38,14 @@ namespace TinyTumble.Tests
         }
 
         [Test]
-        public void Packet_QuantizesStick_SoPredictionMatchesHost()
+        public void Packet_QuantizesStick_ToAByte()
         {
             var packet = new InputPacket(1, Frame(new Vector2(0.333f, -0.5f)));
             PlayerInputFrame once = packet.ToFrame();
             PlayerInputFrame twice = new InputPacket(2, once).ToFrame();
 
             Assert.AreEqual(0.333f, once.Move.x, 1f / 127f);
-            Assert.AreEqual(once.Move, twice.Move, "Quantization must be stable: the owner predicts with the value the host gets.");
+            Assert.AreEqual(once.Move, twice.Move, "Quantization must be stable: re-sending a quantized frame does not drift.");
         }
 
         [Test]

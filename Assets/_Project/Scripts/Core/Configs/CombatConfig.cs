@@ -36,9 +36,10 @@ namespace TinyTumble.Core.Configs
         [Tooltip("Окно, в котором толчок попадает.")]
         [SerializeField, Min(0.01f)] private float _pushActiveTime = 0.14f;
         [SerializeField, Min(0f)] private float _pushCooldown = 0.45f;
-        [Tooltip("Центр зоны попадания перед персонажем, м.")]
-        [SerializeField, Min(0f)] private float _pushReach = 0.7f;
-        [SerializeField, Min(0.01f)] private float _pushRadius = 0.55f;
+        [Tooltip("Толчок попадает касанием кисти. В начале окна тело подаётся вперёд с этой скоростью, м/с, чтобы рука дотянулась.")]
+        [SerializeField, Min(0f)] private float _pushLunge = 1.5f;
+        [Tooltip("Сколько руки возвращаются из толчка в обычную позу, с.")]
+        [SerializeField, Min(0.01f)] private float _pushRecovery = 0.15f;
         [Tooltip("Скорость, которую толчок сообщает предметам.")]
         [SerializeField, Min(0f)] private float _pushItemSpeed = 6f;
 
@@ -82,9 +83,6 @@ namespace TinyTumble.Core.Configs
         [SerializeField, Min(0.01f)] private float _emoteDuration = 0.8f;
 
         [Header("Сочность")]
-        [Tooltip("Хит-стоп за 1 м/с скорости отлёта.")]
-        [SerializeField, Min(0f)] private float _hitStopPerKnockback = 0.008f;
-        [SerializeField, Min(0f)] private float _maxHitStop = 0.12f;
         [Tooltip("Сила тряски камеры за 1 м/с скорости отлёта.")]
         [SerializeField, Min(0f)] private float _cameraShakePerKnockback = 0.06f;
         [SerializeField, Min(0f)] private float _maxCameraShake = 1.2f;
@@ -101,8 +99,8 @@ namespace TinyTumble.Core.Configs
         public float PushWindup => _pushWindup;
         public float PushActiveTime => _pushActiveTime;
         public float PushCooldown => _pushCooldown;
-        public float PushReach => _pushReach;
-        public float PushRadius => _pushRadius;
+        public float PushLunge => _pushLunge;
+        public float PushRecovery => _pushRecovery;
         public float PushItemSpeed => _pushItemSpeed;
         public float GrabReach => _grabReach;
         public float GrabRadius => _grabRadius;
@@ -124,8 +122,6 @@ namespace TinyTumble.Core.Configs
         public float ParryReflectShake => _parryReflectShake;
         public float EmoteCooldown => _emoteCooldown;
         public float EmoteDuration => _emoteDuration;
-        public float HitStopPerKnockback => _hitStopPerKnockback;
-        public float MaxHitStop => _maxHitStop;
         public float CameraShakePerKnockback => _cameraShakePerKnockback;
         public float MaxCameraShake => _maxCameraShake;
     }

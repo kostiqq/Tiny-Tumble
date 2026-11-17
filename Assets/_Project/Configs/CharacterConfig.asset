@@ -12,13 +12,38 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: cf150c31d39e9b84981ba8112456bf19, type: 3}
   m_Name: CharacterConfig
   m_EditorClassIdentifier: TinyTumble.Core::TinyTumble.Core.Configs.CharacterConfig
+  _mass: 1
   _moveSpeed: 5
   _acceleration: 12
+  _airAcceleration: 5
+  _maxMoveAcceleration: 60
+  _turnSpeed: 900
+  _maxSlopeAngle: 45
   _jumpVelocity: 6
-  _groundCheckDistance: 0.6
+  _coyoteTime: 0.1
+  _jumpBuffer: 0.12
+  _fallGravityMultiplier: 1.8
+  _groundProbeDistance: 0.12
   _dashCooldown: 3
-  _dashDistanceInHeights: 2
-  _characterHeight: 1
+  _dashDistance: 2
   _dashDuration: 0.2
+  _balanceFrequency: 16
+  _balanceDamping: 0.5
+  _staggerBalance: 0.3
+  _rideFrequency: 12
+  _rideDamping: 0.6
+  _poseFrequency: 30
+  _poseDamping: 0.7
+  _limpPose: 0.06
+  _grabbedPose: 0.25
+  _strideLength: 0.7
+  _maxStepRate: 2
+  _stepAngle: 30
+  _kneeBend: 45
+  _armSwingAngle: 25
   _maxRagdollTime: 1
+  _minRagdollTime: 0.35
+  _ragdollSettleSpeed: 1.2
+  _getUpDuration: 0.6
+  _maxGetUpTime: 1.5
   _grabImmunityAfterRagdoll: 1

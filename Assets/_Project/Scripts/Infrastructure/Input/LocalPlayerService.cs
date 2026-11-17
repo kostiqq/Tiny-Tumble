@@ -123,7 +123,7 @@ namespace TinyTumble.Infrastructure.Input
             }
 
             var input = new DevicePlayerInput(devices, _inputConfig);
-            var player = new LocalPlayer(_players.Count, device.displayName, input);
+            var player = new LocalPlayer(_players.Count, device.displayName, input, input);
             _inputs.Add(input);
             _joinedDevices.Add(device);
             _players.Add(player);

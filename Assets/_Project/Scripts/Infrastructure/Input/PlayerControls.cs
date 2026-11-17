@@ -12,6 +12,13 @@ namespace TinyTumble.Infrastructure.Input
         public const string MapName = "Player";
         public const string MoveAction = "Move";
 
+        // Камера: локальна, в кадр ввода персонажа не попадает.
+        public const string LookMouseAction = "LookMouse";
+        public const string LookStickAction = "LookStick";
+        public const string SpectateNextAction = "SpectateNext";
+        public const string SpectatePreviousAction = "SpectatePrevious";
+        public const string CursorToggleAction = "CursorToggle";
+
         public struct ButtonBinding
         {
             public PlayerButtons Button;
@@ -53,6 +60,23 @@ namespace TinyTumble.Infrastructure.Input
                     action.AddBinding(paths[p]);
                 }
             }
+
+            InputAction lookMouse = map.AddAction(LookMouseAction, InputActionType.Value, expectedControlLayout: "Vector2");
+            lookMouse.AddBinding("<Mouse>/delta");
+
+            InputAction lookStick = map.AddAction(LookStickAction, InputActionType.Value, expectedControlLayout: "Vector2");
+            lookStick.AddBinding("<Gamepad>/rightStick");
+
+            InputAction next = map.AddAction(SpectateNextAction, InputActionType.Button);
+            next.AddBinding("<Gamepad>/rightShoulder");
+            next.AddBinding("<Keyboard>/e");
+
+            InputAction previous = map.AddAction(SpectatePreviousAction, InputActionType.Button);
+            previous.AddBinding("<Gamepad>/leftShoulder");
+            previous.AddBinding("<Keyboard>/q");
+
+            InputAction cursorToggle = map.AddAction(CursorToggleAction, InputActionType.Button);
+            cursorToggle.AddBinding("<Keyboard>/escape");
 
             return map;
         }

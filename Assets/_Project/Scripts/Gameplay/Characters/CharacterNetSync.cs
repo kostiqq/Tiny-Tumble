@@ -6,10 +6,10 @@ using VContainer;
 namespace TinyTumble.Gameplay.Characters
 {
     /// <summary>
-    /// Состояние персонажа по сети. Хост раз в несколько тиков рассылает снимок (положение, поворот, скорость,
-    /// состояние, номер применённого кадра ввода) по ненадёжному каналу: устаревший снимок не нужен, а свежий
-    /// всё равно придёт следом. Клиенты копят снимки для интерполяции; владелец по ним сверяет предсказание.
-    /// Вместо NetworkTransform, потому что у владельца тело должно двигаться само, а не за сервером.
+    /// Состояние персонажа по сети. Хост раз в несколько тиков рассылает снимок (таз, направление, повороты костей,
+    /// состояние) по ненадёжному каналу: устаревший снимок не нужен, а свежий всё равно придёт следом.
+    /// Клиенты копят снимки и показывают персонажа с задержкой; свой — с меньшей задержкой, чем чужие.
+    /// Вместо NetworkTransform: нужен весь скелет, а не один трансформ.
     /// </summary>
     public sealed class CharacterNetSync : NetworkBehaviour
     {
@@ -17,42 +17,25 @@ namespace TinyTumble.Gameplay.Characters
         private const float DefaultDelay = 0.1f;
 
         private readonly SnapshotInterpolator _interpolator = new SnapshotInterpolator();
-        private readonly PredictionHistory _history = new PredictionHistory();
-        private PredictionCorrector _corrector = new PredictionCorrector(0.03f, 1.5f, 10f);
         private int _interval = DefaultInterval;
         private float _delay = DefaultDelay;
+        private float _ownDelay = DefaultDelay;
         private int _ticksSinceSend = int.MaxValue;
-        private BodySnapshot _latest;
-        private bool _hasLatest;
-        private bool _hasUnreadLatest;
 
         /// <summary>Хост: растёт при телепорте (возрождение), чтобы клиенты не интерполировали через весь стол.</summary>
         public byte TeleportCounter { get; private set; }
-
-        public bool HasState => _hasLatest;
-
-        /// <summary>Самый свежий снимок от хоста.</summary>
-        public BodySnapshot Latest => _latest;
-
-        public PredictionHistory History => _history;
-
-        public PredictionCorrector Corrector => _corrector;
 
         [Inject]
         public void Construct(SessionConfig config)
         {
             _interval = config.SnapshotIntervalTicks;
             _delay = config.InterpolationDelay;
-            _corrector = new PredictionCorrector(config.PredictionTolerance, config.PredictionSnapDistance, config.PredictionCorrectionRate);
+            _ownDelay = config.OwnInterpolationDelay;
         }
 
         public override void OnNetworkSpawn()
         {
             _interpolator.Clear();
-            _history.Clear();
-            _corrector.Reset();
-            _hasLatest = false;
-            _hasUnreadLatest = false;
             _ticksSinceSend = int.MaxValue;
         }
 
@@ -81,36 +64,16 @@ namespace TinyTumble.Gameplay.Characters
             _ticksSinceSend = int.MaxValue;
         }
 
-        /// <summary>Клиент: интерполированное состояние на момент «сейчас минус задержка».</summary>
-        public bool TrySample(float deltaTime, out BodySnapshot snapshot)
+        /// <summary>Клиент: пара снимков вокруг момента «сейчас минус задержка» и доля между ними.</summary>
+        public bool TrySample(float deltaTime, out BodySnapshot from, out BodySnapshot to, out float t)
         {
-            return _interpolator.TrySample(deltaTime, _delay, out snapshot);
-        }
-
-        /// <summary>Владелец: новый снимок с прошлого вызова (для сверки предсказания).</summary>
-        public bool TryTakeUnread(out BodySnapshot snapshot)
-        {
-            snapshot = _latest;
-            if (!_hasUnreadLatest)
-            {
-                return false;
-            }
-
-            _hasUnreadLatest = false;
-            return true;
+            return _interpolator.TrySample(deltaTime, IsOwner ? _ownDelay : _delay, out from, out to, out t);
         }
 
         [Rpc(SendTo.NotServer, Delivery = RpcDelivery.Unreliable)]
         private void StateRpc(BodySnapshot snapshot)
         {
-            if (!_interpolator.Add(snapshot))
-            {
-                return;
-            }
-
-            _latest = snapshot;
-            _hasLatest = true;
-            _hasUnreadLatest = true;
+            _interpolator.Add(snapshot);
         }
     }
 }

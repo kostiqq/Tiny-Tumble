@@ -15,7 +15,7 @@ namespace TinyTumble.Tests
             {
                 Time = time,
                 Position = position,
-                Rotation = Quaternion.identity,
+                Rotation = QuaternionPacking.Pack(Quaternion.identity),
                 Velocity = Vector3.zero,
                 State = state,
                 Teleport = teleport,
@@ -32,9 +32,9 @@ namespace TinyTumble.Tests
             }
 
             // Первый сэмпл ставит часы на «последний снимок минус задержка».
-            Assert.IsTrue(interpolator.TrySample(Tick, Delay, out BodySnapshot sample));
+            Assert.IsTrue(interpolator.TrySample(Tick, Delay, out BodySnapshot from, out BodySnapshot to, out float t));
             Assert.AreEqual(0.4 - Delay, interpolator.RenderTime, 1e-6);
-            Assert.AreEqual(0.3f, sample.Position.x, 1e-4f, "Position is interpolated at render time.");
+            Assert.AreEqual(0.3f, Vector3.Lerp(from.Position, to.Position, t).x, 1e-4f, "Position is interpolated at render time.");
         }
 
         [Test]
@@ -55,8 +55,8 @@ namespace TinyTumble.Tests
             interpolator.Add(Snapshot(0.08, new Vector3(0f, 1f, 0f), teleport: 1));
 
             Assert.AreEqual(1, interpolator.Count, "No interpolation across the table after a respawn.");
-            Assert.IsTrue(interpolator.TrySample(Tick, Delay, out BodySnapshot sample));
-            Assert.AreEqual(new Vector3(0f, 1f, 0f), sample.Position);
+            Assert.IsTrue(interpolator.TrySample(Tick, Delay, out BodySnapshot from, out BodySnapshot to, out float t));
+            Assert.AreEqual(new Vector3(0f, 1f, 0f), Vector3.Lerp(from.Position, to.Position, t));
         }
 
         [Test]
@@ -64,12 +64,12 @@ namespace TinyTumble.Tests
         {
             var interpolator = new SnapshotInterpolator();
             interpolator.Add(Snapshot(0.0, Vector3.zero));
-            interpolator.TrySample(Tick, Delay, out _);
+            interpolator.TrySample(Tick, Delay, out _, out _, out _);
             double start = interpolator.RenderTime;
 
             // Пришёл снимок намного новее: часы ускоряются, но не прыгают (расхождение меньше порога).
             interpolator.Add(Snapshot(0.3, Vector3.one));
-            interpolator.TrySample(Tick, Delay, out _);
+            interpolator.TrySample(Tick, Delay, out _, out _, out _);
             double advanced = interpolator.RenderTime - start;
 
             Assert.Greater(advanced, Tick, "Behind the target, the playback clock runs faster.");
@@ -84,67 +84,78 @@ namespace TinyTumble.Tests
             interpolator.Add(Snapshot(0.04, Vector3.zero, state: 2));
             interpolator.Add(Snapshot(0.2, Vector3.zero, state: 2));
 
-            interpolator.TrySample(Tick, Delay, out BodySnapshot sample);
+            interpolator.TrySample(Tick, Delay, out BodySnapshot from, out _, out _);
 
             Assert.AreEqual(0.1, interpolator.RenderTime, 1e-6);
-            Assert.AreEqual(2, sample.State, "State changes when the playback reaches it.");
+            Assert.AreEqual(2, from.State, "State changes when the playback reaches it.");
         }
 
         [Test]
-        public void History_ShiftsWithCorrections()
+        public void Interpolator_NoNewSnapshots_ExtrapolatesBriefly()
         {
-            var history = new PredictionHistory();
-            history.Record(10, new Vector3(1f, 0f, 0f), Vector3.right);
-            history.Record(11, new Vector3(2f, 0f, 0f), Vector3.right);
-            history.Shift(new Vector3(0f, 0f, 0.5f));
+            var interpolator = new SnapshotInterpolator();
+            BodySnapshot moving = Snapshot(0.0, Vector3.zero);
+            moving.Velocity = new Vector3(1f, 0f, 0f);
+            interpolator.Add(moving);
+            interpolator.TrySample(Tick, 0f, out _, out _, out _);
 
-            Assert.IsTrue(history.TryGet(11, out Vector3 position, out Vector3 velocity));
-            Assert.AreEqual(new Vector3(2f, 0f, 0.5f), position);
-            Assert.AreEqual(Vector3.right, velocity);
-            Assert.IsFalse(history.TryGet(12, out _, out _));
-            Assert.IsFalse(history.TryGet(0, out _, out _), "0 means no frame.");
-        }
-
-        [Test]
-        public void History_OldEntriesAreOverwritten()
-        {
-            var history = new PredictionHistory();
-            history.Record(1, Vector3.one, Vector3.zero);
-            history.Record(129, Vector3.zero, Vector3.zero);
-
-            Assert.IsFalse(history.TryGet(1, out _, out _), "The ring keeps only recent frames.");
-            Assert.IsTrue(history.TryGet(129, out _, out _));
-        }
-
-        [Test]
-        public void Corrector_IgnoresTinyErrors_SnapsHugeOnes_SmoothsTheRest()
-        {
-            var corrector = new PredictionCorrector(tolerance: 0.03f, snapDistance: 1.5f, rate: 10f);
-
-            Assert.AreEqual(CorrectionKind.None, corrector.Evaluate(new Vector3(0.01f, 0f, 0f), Vector3.zero, out _));
-            Assert.AreEqual(CorrectionKind.Snap, corrector.Evaluate(new Vector3(3f, 0f, 0f), Vector3.zero, out Vector3 snapError));
-            Assert.AreEqual(3f, snapError.x, 1e-5f);
-
-            Assert.AreEqual(CorrectionKind.Smooth, corrector.Evaluate(new Vector3(0.5f, 0f, 0f), Vector3.zero, out _));
-            Vector3 total = Vector3.zero;
-            for (int i = 0; i < 200; i++)
+            for (int i = 0; i < 50; i++)
             {
-                total += corrector.Step(Tick);
+                interpolator.TrySample(Tick, 0f, out _, out _, out _);
             }
 
-            Assert.AreEqual(0.5f, total.x, 1e-3f, "Smooth correction removes the whole error over time.");
-            Assert.AreEqual(Vector3.zero, corrector.PendingError);
+            interpolator.TrySample(Tick, 0f, out BodySnapshot from, out BodySnapshot to, out float t);
+            Assert.AreEqual(from.Position, to.Position, "Past the last snapshot both ends are the same extrapolated state.");
+            Assert.LessOrEqual(from.Position.x, 0.1f + 1e-4f, "Extrapolation is capped.");
         }
 
         [Test]
-        public void Corrector_StepIsAFraction_NotTheWholeError()
+        public void Quaternion_PacksInto32Bits_WithSmallError()
         {
-            var corrector = new PredictionCorrector(0.03f, 1.5f, 10f);
-            corrector.Evaluate(new Vector3(1f, 0f, 0f), Vector3.zero, out _);
+            var random = new System.Random(7);
+            for (int i = 0; i < 500; i++)
+            {
+                Quaternion rotation = Quaternion.Euler(
+                    (float)random.NextDouble() * 360f, (float)random.NextDouble() * 360f, (float)random.NextDouble() * 360f);
+                Quaternion unpacked = QuaternionPacking.Unpack(QuaternionPacking.Pack(rotation));
+                Assert.Less(Quaternion.Angle(rotation, unpacked), 0.3f, $"Rotation {rotation.eulerAngles}");
+            }
+        }
 
-            Vector3 step = corrector.Step(Tick);
+        [Test]
+        public void Quaternion_Packing_HandlesNegatedAndIdentity()
+        {
+            Quaternion rotation = Quaternion.Euler(30f, 60f, 90f);
+            var negated = new Quaternion(-rotation.x, -rotation.y, -rotation.z, -rotation.w);
 
-            Assert.AreEqual(0.2f, step.x, 1e-5f, "rate × dt = 10 × 0.02.");
+            Assert.Less(Quaternion.Angle(rotation, QuaternionPacking.Unpack(QuaternionPacking.Pack(negated))), 0.3f, "q and -q are the same rotation.");
+            Assert.Less(Quaternion.Angle(Quaternion.identity, QuaternionPacking.Unpack(QuaternionPacking.Pack(Quaternion.identity))), 0.01f);
+        }
+
+        [Test]
+        public void Yaw_RoundTrips()
+        {
+            Vector3 facing = new Vector3(-0.6f, 0f, 0.8f);
+            Vector3 unpacked = BodySnapshot.UnpackYaw(BodySnapshot.PackYaw(facing));
+            Assert.Less(Vector3.Angle(facing, unpacked), 0.05f);
+        }
+
+        [Test]
+        public void PackedPose_HoldsEveryBoneButTheRoot()
+        {
+            Assert.AreEqual(TinyTumble.Gameplay.Characters.RagdollBones.Count - 1, PackedPose.Count,
+                "Every bone except the hips goes into the snapshot.");
+
+            var pose = new PackedPose();
+            for (int i = 0; i < PackedPose.Count; i++)
+            {
+                pose[i] = (uint)(i * 1000 + 1);
+            }
+
+            for (int i = 0; i < PackedPose.Count; i++)
+            {
+                Assert.AreEqual((uint)(i * 1000 + 1), pose[i]);
+            }
         }
     }
 }

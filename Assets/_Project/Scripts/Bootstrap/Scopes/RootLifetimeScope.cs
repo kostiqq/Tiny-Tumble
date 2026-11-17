@@ -51,6 +51,7 @@ namespace TinyTumble.Bootstrap.Scopes
         [SerializeField] private BotConfig _botConfig;
         [SerializeField] private SessionConfig _sessionConfig;
         [SerializeField] private InputConfig _inputConfig;
+        [SerializeField] private CameraConfig _cameraConfig;
 
         [Header("Сеть")]
         [Tooltip("Префаб с NetworkManager и UnityTransport. Создаётся отдельным корневым объектом: NGO не разрешает его вкладывать.")]
@@ -68,6 +69,7 @@ namespace TinyTumble.Bootstrap.Scopes
             builder.RegisterInstance(_botConfig);
             builder.RegisterInstance(_sessionConfig);
             builder.RegisterInstance(_inputConfig);
+            builder.RegisterInstance(_cameraConfig);
 
             MessagePipeOptions options = builder.RegisterMessagePipe();
             builder.RegisterMessageBroker<PlayerEliminated>(options);

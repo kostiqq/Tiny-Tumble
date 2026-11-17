@@ -23,7 +23,9 @@ namespace TinyTumble.Gameplay.Combat
                 return;
             }
 
-            if (body.TryGetComponent(out PlayerCharacter character))
+            // Персонаж — это несколько костей: выпадает, когда в зону вошла любая.
+            PlayerCharacter character = CharacterBodyPart.OwnerOf(body);
+            if (character != null)
             {
                 character.OnEnteredKillZone();
             }
