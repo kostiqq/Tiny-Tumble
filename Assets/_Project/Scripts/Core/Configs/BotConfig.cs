@@ -25,8 +25,8 @@ namespace TinyTumble.Core.Configs
         [SerializeField, Min(0f)] private float _aggressionDelay = 2.5f;
         [Tooltip("На таком расстоянии бот замечает соперника, м.")]
         [SerializeField, Min(0f)] private float _aggroRange = 8f;
-        [Tooltip("С такого расстояния бот толкает, м.")]
-        [SerializeField, Min(0f)] private float _pushRange = 1.1f;
+        [Tooltip("С такого расстояния бот толкает, м. Толчок попадает касанием кисти, поэтому дистанция — длина руки с выпадом.")]
+        [SerializeField, Min(0f)] private float _pushRange = 0.75f;
         [Tooltip("Рывок к сопернику, если тот дальше этого, м.")]
         [SerializeField, Min(0f)] private float _dashRange = 3f;
         [SerializeField, Range(0f, 1f)] private float _dashChance = 0.25f;

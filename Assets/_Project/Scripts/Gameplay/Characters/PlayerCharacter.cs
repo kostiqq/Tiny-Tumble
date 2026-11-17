@@ -16,23 +16,23 @@ using VContainer;
 namespace TinyTumble.Gameplay.Characters
 {
     /// <summary>
-    /// Персонаж-капсула: движение, ragdoll, бой. Игрок, удалённый игрок и бот управляют им одинаково,
-    /// через <see cref="IPlayerInput"/>.
-    /// Хост авторитетен: он симулирует всех и решает попадания. Клиент-владелец предсказывает своё движение
-    /// в обычном состоянии и плавно исправляет расхождение с хостом; в остальных состояниях (удар, ragdoll,
-    /// его держат) и для чужих персонажей тело кинематическое и интерполируется по снимкам хоста.
+    /// Физический персонаж (active ragdoll): движение, равновесие, позы, бой. Игрок, удалённый игрок и бот
+    /// управляют им одинаково, через <see cref="IPlayerInput"/>.
+    /// Физику всех персонажей считает только хост: он применяет ввод, решает попадания и рассылает снимки
+    /// (таз и повороты костей). Клиенты, включая владельца, показывают снимки с интерполяцией; предсказания нет,
+    /// поэтому все машины видят одно и то же. Владелец сразу показывает свой замах и эмоцию поверх снимков.
     /// </summary>
-    [RequireComponent(typeof(Rigidbody))]
-    public sealed class PlayerCharacter : NetworkBehaviour, IGrabbable, ICharacterInfo, ICombatant
+    public sealed class PlayerCharacter : NetworkBehaviour, IGrabbable, ICharacterInfo, ICombatant, ICollisionBody
     {
         public const int BotSlot = -1;
 
         private const float RagdollSpin = 9f;
         private const float BreakFreeSpeed = 3f;
-        private const float GroundSearchDistance = 2f;
+        private const float UprightDot = 0.9f;
+        private const float OverlayHold = 0.2f;
+        private const float OverlayFade = 0.2f;
 
-        [SerializeField] private Rigidbody _rigidbody;
-        [SerializeField] private CapsuleCollider _collider;
+        [SerializeField] private RagdollRig _rig;
         [SerializeField] private NetworkPlayerInput _networkInput;
         [SerializeField] private CharacterNetSync _sync;
         [SerializeField] private CharacterPresentation _presentation;
@@ -54,6 +54,7 @@ namespace TinyTumble.Gameplay.Characters
         private IPublisher<CharacterHit> _hitPublisher;
 
         private CharacterMotor _motor;
+        private ProceduralPose _pose;
         private CharacterCombat _combat;
         private CollisionIgnores _ignores;
         private CharacterState _state;
@@ -75,23 +76,29 @@ namespace TinyTumble.Gameplay.Characters
         private readonly List<PlayerCharacter> _holderRefs = new List<PlayerCharacter>(GrabLinks.Capacity);
         private PlayerCharacter _thrownBy;
         private float _thrownUntil;
-        private Quaternion _getUpFrom;
-        private Vector3 _getUpCenterFrom;
-        private Vector3 _getUpCenterTo;
+        private int _emote = -1;
+        private float _emoteStart;
 
         // Только у клиента-владельца.
         private IPlayerInput _localSource;
-        private bool _predicting;
-        private uint _lastSubmitted;
-        private byte _seenTeleport;
         private float _localPushReady;
         private float _localEmoteReady;
+        private float _localSwingStart = float.NegativeInfinity;
+        private float _localEmoteStart = float.NegativeInfinity;
+        private int _localEmote = -1;
 
         public int ParticipantId => _participantId;
 
         public ulong Id => NetworkObjectId;
 
-        public Vector3 Position => _rigidbody.position;
+        /// <summary>Опора под персонажем (уровень подошв стоя), по физике хоста. Для правил и ботов.</summary>
+        public Vector3 Position => _rig.FeetPosition;
+
+        /// <summary>Середина роста над видимым тазом: для камеры, без дрожания между тиками физики.</summary>
+        public Vector3 VisualCenter => _rig.Hips.transform.position + Vector3.up * (_rig.Height * 0.5f - _rig.RideHeight);
+
+        /// <summary>Что видно на экране и движется вместе с телом: для группы камеры.</summary>
+        public Transform TrackingTarget => _rig.Hips.transform;
 
         public bool IsSwinging => _combat != null && _combat.IsSwinging;
 
@@ -112,9 +119,17 @@ namespace TinyTumble.Gameplay.Characters
 
         public CharacterPresentation Presentation => _presentation;
 
-        public Rigidbody Body => _rigidbody;
+        public RagdollRig Rig => _rig;
 
-        public float Height => _characterConfig != null ? _characterConfig.CharacterHeight : 1f;
+        /// <summary>Таз: корень физического скелета.</summary>
+        public Rigidbody Body => _rig.Hips;
+
+        public Collider[] Colliders => _rig.Colliders;
+
+        public float Height => _rig.Height;
+
+        /// <summary>«Вверх» персонажа по тазу: у стоящего совпадает с мировым.</summary>
+        public Vector3 Up => _rig.Up;
 
         public Vector3 Facing => _motor != null ? _motor.Facing : transform.forward;
 
@@ -126,14 +141,10 @@ namespace TinyTumble.Gameplay.Characters
 
         public bool IsEliminated => _eliminated;
 
-        /// <summary>Клиент-владелец сейчас предсказывает движение (диагностика, тесты).</summary>
-        public bool IsPredicting => _predicting;
-
         public bool IsHeavy => true;
 
-        public float HoldBottomOffset => 0f;
-
-        private Vector3 CenterOffset => Vector3.up * (Height * 0.5f);
+        /// <summary>Держат за таз; низ — подошвы.</summary>
+        public float HoldBottomOffset => _rig.RideHeight;
 
         [Inject]
         public void Construct(
@@ -154,9 +165,10 @@ namespace TinyTumble.Gameplay.Characters
             _characters = characters;
             _moveFrame = moveFrame;
             _hitPublisher = hitPublisher;
-            _motor = new CharacterMotor(_rigidbody, characterConfig);
+            _rig.Configure(characterConfig.Mass, characterConfig.PoseFrequency, characterConfig.PoseDamping);
+            _motor = new CharacterMotor(_rig, characterConfig);
+            _pose = new ProceduralPose(_rig, characterConfig);
             _combat = new CharacterCombat(this, combatConfig);
-            ApplyBodyDimensions();
         }
 
         /// <summary>Хост, до Spawn: кто управляет персонажем, в каком он слоте и где возрождается.</summary>
@@ -179,7 +191,7 @@ namespace TinyTumble.Gameplay.Characters
 
         public override void OnNetworkSpawn()
         {
-            _ignores = new CollisionIgnores(_collider);
+            _ignores = new CollisionIgnores(_rig.Colliders);
             _motor.SetFacing(transform.forward);
             _state = CharacterState.Normal;
             _stateSince = Time.fixedTime;
@@ -189,12 +201,13 @@ namespace TinyTumble.Gameplay.Characters
                 // Переменные пишем здесь, а не до Spawn: до спавна NGO ещё не связал их с объектом.
                 _slot.Value = _pendingSlot;
                 _localIndex.Value = _pendingLocalIndex;
+                _rig.SetSimulated(true);
                 ApplyStatePhysics();
             }
             else
             {
-                // Чужое тело ведут снимки хоста; своё станет динамическим, когда начнётся предсказание.
-                _rigidbody.isKinematic = true;
+                // Физику считает только хост: у клиента скелет ставится по снимкам.
+                _rig.SetSimulated(false);
             }
 
             _slot.OnValueChanged += OnSlotChanged;
@@ -202,7 +215,6 @@ namespace TinyTumble.Gameplay.Characters
             _shake.OnValueChanged += OnShakeChanged;
             _holders.OnValueChanged += OnHoldersChanged;
             _shakeView.Value = _shake.Value;
-            _presentation.Bind(this);
             ApplyColor();
             BindLocalInput();
 
@@ -235,7 +247,6 @@ namespace TinyTumble.Gameplay.Characters
             }
 
             _localSource = null;
-            _predicting = false;
 
             // Владелец отключился посреди матча: NGO убрал его персонажа, для правил это выбывание.
             // При закрытии сессии выбывания не считаем, иначе матч «закончится» по пути в меню.
@@ -254,11 +265,10 @@ namespace TinyTumble.Gameplay.Characters
 
         private void Reset()
         {
-            _rigidbody = GetComponent<Rigidbody>();
-            _collider = GetComponent<CapsuleCollider>();
+            _rig = GetComponent<RagdollRig>();
             _networkInput = GetComponent<NetworkPlayerInput>();
             _sync = GetComponent<CharacterNetSync>();
-            _presentation = GetComponentInChildren<CharacterPresentation>();
+            _presentation = GetComponent<CharacterPresentation>();
         }
 
         private void FixedUpdate()
@@ -269,20 +279,30 @@ namespace TinyTumble.Gameplay.Characters
             }
 
             float now = Time.fixedTime;
-            float deltaTime = Time.fixedDeltaTime;
             _ignores.Tick(now);
 
             if (IsServer)
             {
-                ServerTick(now, deltaTime);
+                ServerTick(now, Time.fixedDeltaTime);
             }
             else if (IsOwner && _localSource != null)
             {
-                OwnerTick(now, deltaTime);
+                OwnerTick(now);
             }
-            else
+        }
+
+        private void Update()
+        {
+            // Клиент ставит скелет каждый кадр отрисовки, а не тик физики: движение без ступенек.
+            if (!IsSpawned || IsServer || _motor == null)
             {
-                FollowHost(deltaTime);
+                return;
+            }
+
+            FollowHost(Time.deltaTime);
+            if (IsOwner)
+            {
+                ApplyLocalOverlay(Time.time);
             }
         }
 
@@ -295,21 +315,30 @@ namespace TinyTumble.Gameplay.Characters
                 return;
             }
 
-            // Сначала снимок — это результат прошлого тика, вместе с номером последнего применённого кадра ввода.
+            // Сначала снимок — это результат прошлого тика.
             _flags = CollectFlags();
             _sync.ServerTick(CaptureSnapshot());
 
             // Ровно один сэмпл за тик, даже без управления: на нём держится накопление нажатий и очередь сетевого ввода.
             PlayerInputFrame frame = _input != null ? _input.Sample() : default;
 
+            EvaluatePose(now, deltaTime);
+            Quaternion[] desired = _pose.Desired;
+            float yaw = _pose.YawOffset;
+
             switch (_state)
             {
                 case CharacterState.Normal:
                     _motor.Step(frame, now, deltaTime, _combat.SpeedMultiplier, allowDash: true);
+                    _motor.Support(1f, 1f, desired, yaw);
+                    _rig.SetDriveStrength(1f);
                     break;
 
                 case CharacterState.Stagger:
-                    StepUncontrolled(deltaTime);
+                    _motor.ProbeGround(now);
+                    _motor.Coast();
+                    _motor.Support(_characterConfig.StaggerBalance, 1f, desired, yaw);
+                    _rig.SetDriveStrength(1f);
                     if (now - _stateSince >= _combatConfig.StaggerTime)
                     {
                         EnterState(CharacterState.Normal, now);
@@ -318,9 +347,10 @@ namespace TinyTumble.Gameplay.Characters
                     break;
 
                 case CharacterState.Ragdoll:
-                    StepUncontrolled(deltaTime);
                     _motor.ProbeGround(now);
-                    if (CombatRules.ShouldGetUp(now - _stateSince, _motor.IsGrounded, _rigidbody.linearVelocity.magnitude, _characterConfig))
+                    _motor.Coast();
+                    _rig.SetDriveStrength(_characterConfig.LimpPose);
+                    if (CombatRules.ShouldGetUp(now - _stateSince, IsNearGround(), _rig.Hips.linearVelocity.magnitude, _characterConfig))
                     {
                         BeginGetUp(now);
                     }
@@ -328,14 +358,16 @@ namespace TinyTumble.Gameplay.Characters
                     break;
 
                 case CharacterState.GettingUp:
-                    StepGetUp(now);
+                    StepGetUp(now, desired, yaw);
                     break;
 
                 case CharacterState.Grabbed:
+                    _rig.SetDriveStrength(_characterConfig.GrabbedPose);
                     StepGrabbed(now);
                     break;
             }
 
+            _rig.DriveTowards(desired);
             _combat.Step(frame, now, _state == CharacterState.Normal);
 
             if (_thrownBy != null && now > _thrownUntil)
@@ -343,52 +375,66 @@ namespace TinyTumble.Gameplay.Characters
                 _thrownBy = null;
             }
 
-            if (_rigidbody.position.y < _matchConfig.EliminationHeight)
+            if (_rig.Hips.position.y < _matchConfig.EliminationHeight)
             {
                 Fall();
             }
         }
 
-        private void StepUncontrolled(float deltaTime)
+        private void EvaluatePose(float now, float deltaTime)
         {
-            Vector3 velocity = _rigidbody.linearVelocity;
-            _motor.ApplyFallGravity(ref velocity, deltaTime);
-            _rigidbody.linearVelocity = velocity;
+            Vector3 planar = _motor.PlanarVelocity;
+            float speed = planar.magnitude;
+            _pose.Advance(speed * deltaTime, deltaTime);
+
+            if (_emote >= 0 && now - _emoteStart >= _combatConfig.EmoteDuration)
+            {
+                _emote = -1;
+            }
+
+            var input = new PoseInput
+            {
+                Gait = _characterConfig.MoveSpeed > 0f ? speed / _characterConfig.MoveSpeed : 0f,
+                Grounded = _motor.IsGrounded,
+                State = _state,
+                Flags = _flags,
+                Swing = _combat.SwingWeight(now),
+                Emote = _state == CharacterState.Normal ? _emote : -1,
+                EmoteProgress = (now - _emoteStart) / _combatConfig.EmoteDuration,
+            };
+            _pose.Evaluate(input);
+        }
+
+        /// <summary>Лежит на опоре: таз не дальше обычной высоты над ней.</summary>
+        private bool IsNearGround()
+        {
+            return _motor.GroundDistance <= _rig.RideHeight + _characterConfig.GroundProbeDistance;
         }
 
         private void BeginGetUp(float now)
         {
-            _getUpFrom = _rigidbody.rotation;
-            _getUpCenterFrom = _rigidbody.position + _rigidbody.rotation * CenterOffset;
-            _getUpCenterTo = _getUpCenterFrom;
-
-            // Встаём над опорой: центр поднимается на половину роста, иначе ноги ушли бы в пол.
-            if (Physics.Raycast(_getUpCenterFrom, Vector3.down, out RaycastHit hit, GroundSearchDistance,
-                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
-            {
-                _getUpCenterTo.y = Mathf.Max(_getUpCenterFrom.y, hit.point.y + Height * 0.5f);
-            }
-
             // Смотреть будем туда, куда смотрела «голова» лёжа.
-            Vector3 forward = Vector3.ProjectOnPlane(_rigidbody.rotation * Vector3.forward, Vector3.up);
-            Vector3 up = Vector3.ProjectOnPlane(_rigidbody.rotation * Vector3.up, Vector3.up);
+            Vector3 forward = Vector3.ProjectOnPlane(_rig.Forward, Vector3.up);
+            Vector3 up = Vector3.ProjectOnPlane(_rig.Up, Vector3.up);
             _motor.SetFacing(forward.sqrMagnitude > up.sqrMagnitude ? forward : up);
             EnterState(CharacterState.GettingUp, now);
         }
 
-        private void StepGetUp(float now)
+        private void StepGetUp(float now, Quaternion[] desired, float yaw)
         {
-            float t = Mathf.Clamp01((now - _stateSince) / _characterConfig.GetUpDuration);
+            float elapsed = now - _stateSince;
+            float t = Mathf.Clamp01(elapsed / _characterConfig.GetUpDuration);
             float eased = t * t * (3f - 2f * t);
-            Quaternion rotation = Quaternion.Slerp(_getUpFrom, Quaternion.LookRotation(Facing, Vector3.up), eased);
-            Vector3 center = Vector3.Lerp(_getUpCenterFrom, _getUpCenterTo, eased);
-            _rigidbody.MoveRotation(rotation);
-            _rigidbody.MovePosition(center - rotation * CenterOffset);
 
-            if (t >= 1f)
+            _motor.ProbeGround(now);
+            _motor.Coast();
+            _motor.Support(eased, eased, desired, yaw);
+            _rig.SetDriveStrength(Mathf.Lerp(_characterConfig.LimpPose, 1f, eased));
+
+            bool upright = Vector3.Dot(_rig.Up, Vector3.up) >= UprightDot;
+            if ((t >= 1f && upright) || elapsed >= _characterConfig.MaxGetUpTime)
             {
                 EnterState(CharacterState.Normal, now);
-                _rigidbody.linearVelocity = Vector3.zero;
                 _grabImmuneUntil = now + _characterConfig.GrabImmunityAfterRagdoll;
                 _motor.ResetTransient();
             }
@@ -403,25 +449,10 @@ namespace TinyTumble.Gameplay.Characters
 
         private void ApplyStatePhysics()
         {
-            switch (_state)
-            {
-                case CharacterState.Ragdoll:
-                    _rigidbody.isKinematic = false;
-                    _rigidbody.constraints = RigidbodyConstraints.None;
-                    break;
-
-                case CharacterState.GettingUp:
-                case CharacterState.Grabbed:
-                    // Положение задаём сами (подъём, руки держащих): физика не должна с этим спорить.
-                    _rigidbody.constraints = RigidbodyConstraints.FreezeRotation;
-                    _rigidbody.isKinematic = true;
-                    break;
-
-                default:
-                    _rigidbody.isKinematic = false;
-                    _rigidbody.constraints = RigidbodyConstraints.FreezeRotation;
-                    break;
-            }
+            // Таз держащегося ведут руки держащих; в остальных состояниях тело целиком физическое.
+            _rig.SetHipsKinematic(_state == CharacterState.Grabbed);
+            // Ноги сталкиваются с миром только у лежащего: на ногах вес держит пружина таза.
+            _rig.SetLegCollisions(_state == CharacterState.Ragdoll);
         }
 
         private CharacterFlags CollectFlags()
@@ -447,17 +478,20 @@ namespace TinyTumble.Gameplay.Characters
 
         private BodySnapshot CaptureSnapshot()
         {
-            return new BodySnapshot
+            Rigidbody hips = _rig.Hips;
+            var snapshot = new BodySnapshot
             {
                 Time = Time.fixedTimeAsDouble,
-                Ack = ReferenceEquals(_input, _networkInput) ? _networkInput.LastConsumedSequence : 0u,
-                Position = _rigidbody.position,
-                Rotation = _rigidbody.rotation,
-                Velocity = _rigidbody.isKinematic ? Vector3.zero : _rigidbody.linearVelocity,
+                Position = hips.position,
+                Rotation = QuaternionPacking.Pack(hips.rotation),
+                Velocity = hips.isKinematic ? Vector3.zero : hips.linearVelocity,
+                Yaw = BodySnapshot.PackYaw(Facing),
                 State = (byte)_state,
                 Flags = (byte)_flags,
                 Teleport = _sync.TeleportCounter,
             };
+            _rig.CapturePose(ref snapshot.Pose);
+            return snapshot;
         }
 
         // ---------- Хост: попадания ----------
@@ -484,17 +518,32 @@ namespace TinyTumble.Gameplay.Characters
             }
 
             _combat.CancelActions(now);
+            _emote = -1;
             bool ragdoll = forceRagdoll || CombatRules.ShouldRagdoll(shakeAfter, _combatConfig);
             EnterState(ragdoll ? CharacterState.Ragdoll : CharacterState.Stagger, now);
-            _rigidbody.linearVelocity = velocity;
+            _rig.SetVelocity(velocity);
             if (ragdoll)
             {
-                // Кувырок через голову по направлению удара.
-                Vector3 axis = Vector3.Cross(Vector3.up, Vector3.ProjectOnPlane(velocity, Vector3.up).normalized);
-                _rigidbody.angularVelocity = axis * RagdollSpin;
+                Spin(velocity);
             }
 
             BroadcastHit(attacker, kind, point, speed, shakeAfter);
+        }
+
+        /// <summary>Хост: рывок тела вперёд в начале активного окна толчка, чтобы рука дотянулась.</summary>
+        public void Lunge(Vector3 velocity)
+        {
+            if (IsServer && _state == CharacterState.Normal)
+            {
+                _rig.AddVelocity(velocity);
+            }
+        }
+
+        /// <summary>Хост: эмоция началась (позу ведёт <see cref="ProceduralPose"/>, клиенты видят её в снимках).</summary>
+        public void StartEmote(int index)
+        {
+            _emote = index;
+            _emoteStart = Time.fixedTime;
         }
 
         public void OnEnteredKillZone()
@@ -505,9 +554,9 @@ namespace TinyTumble.Gameplay.Characters
             }
         }
 
-        private void OnCollisionEnter(Collision collision)
+        /// <summary>Кость столкнулась с чем-то: брошенный игрок сбивает того, в кого врезался (раздел 4 GDD).</summary>
+        public void OnPartCollision(Collision collision)
         {
-            // Брошенный игрок сбивает того, в кого врезался (бросок игроком, раздел 4 GDD).
             if (!IsServer || _thrownBy == null || Time.fixedTime > _thrownUntil)
             {
                 return;
@@ -518,8 +567,8 @@ namespace TinyTumble.Gameplay.Characters
                 return;
             }
 
-            Rigidbody other = collision.rigidbody;
-            if (other == null || !other.TryGetComponent(out PlayerCharacter target) || target == this || target == _thrownBy || !target.IsTargetable)
+            PlayerCharacter target = CharacterBodyPart.OwnerOf(collision.rigidbody);
+            if (target == null || target == this || target == _thrownBy || !target.IsTargetable)
             {
                 return;
             }
@@ -527,7 +576,35 @@ namespace TinyTumble.Gameplay.Characters
             PlayerCharacter thrower = _thrownBy;
             _thrownBy = null;
             Vector3 point = collision.contactCount > 0 ? collision.GetContact(0).point : target.Body.position;
-            target.ReceiveHit(_combatConfig.PlayerThrowShake, _rigidbody.linearVelocity, thrower, HitKind.ThrownPlayer, forceRagdoll: false, point);
+            target.ReceiveHit(_combatConfig.PlayerThrowShake, _rig.Hips.linearVelocity, thrower, HitKind.ThrownPlayer, forceRagdoll: false, point);
+        }
+
+        /// <summary>Кисть коснулась чего-то: в активном окне толчка это попадание.</summary>
+        public void OnHandContact(Collision collision)
+        {
+            if (!IsServer || _state != CharacterState.Normal || _eliminated || !_combat.IsSwinging)
+            {
+                return;
+            }
+
+            Rigidbody body = collision.rigidbody;
+            if (body == null || _rig.Owns(body))
+            {
+                return;
+            }
+
+            Vector3 point = collision.contactCount > 0 ? collision.GetContact(0).point : body.position;
+            _combat.OnHandContact(body, point, Time.fixedTime);
+        }
+
+        private void Spin(Vector3 velocity)
+        {
+            // Кувырок через голову по направлению удара.
+            Vector3 flat = Vector3.ProjectOnPlane(velocity, Vector3.up);
+            if (flat.sqrMagnitude > 1e-6f)
+            {
+                _rig.Hips.angularVelocity = Vector3.Cross(Vector3.up, flat.normalized) * RagdollSpin;
+            }
         }
 
         private void Fall()
@@ -551,17 +628,13 @@ namespace TinyTumble.Gameplay.Characters
             float now = Time.fixedTime;
             DetachAllGrabs(now);
             _thrownBy = null;
+            _emote = -1;
             EnterState(CharacterState.Normal, now);
-            _rigidbody.position = _spawnPosition;
-            _rigidbody.rotation = _spawnRotation;
-            transform.SetPositionAndRotation(_spawnPosition, _spawnRotation);
-            _rigidbody.linearVelocity = Vector3.zero;
-            _rigidbody.angularVelocity = Vector3.zero;
+            _rig.ResetPose(_spawnPosition, _spawnRotation);
             _motor.SetFacing(_spawnRotation * Vector3.forward);
             _motor.ResetTransient();
             _shake.Value = 0f;
             _sync.MarkTeleported();
-            _presentation.Teleported();
         }
 
         private void Eliminate()
@@ -599,6 +672,7 @@ namespace TinyTumble.Gameplay.Characters
                 _grabStart = now;
                 _combat.CancelActions(now);
                 _thrownBy = null;
+                _emote = -1;
                 EnterState(CharacterState.Grabbed, now);
             }
 
@@ -621,17 +695,16 @@ namespace TinyTumble.Gameplay.Characters
                 float shakeAfter = CombatRules.AddShake(_shake.Value, _combatConfig.PlayerThrowShake, _combatConfig);
                 _shake.Value = shakeAfter;
                 EnterState(CharacterState.Ragdoll, now);
-                _rigidbody.linearVelocity = velocity;
-                Vector3 axis = Vector3.Cross(Vector3.up, Vector3.ProjectOnPlane(velocity, Vector3.up).normalized);
-                _rigidbody.angularVelocity = axis * RagdollSpin;
+                _rig.SetVelocity(velocity);
+                Spin(velocity);
                 _thrownBy = grabber;
                 _thrownUntil = now + _combatConfig.ThrownLifetime;
-                BroadcastHit(grabber, HitKind.ThrownPlayer, _rigidbody.position, velocity.magnitude, shakeAfter);
+                BroadcastHit(grabber, HitKind.ThrownPlayer, _rig.Hips.position, velocity.magnitude, shakeAfter);
             }
             else
             {
                 EnterState(CharacterState.Stagger, now);
-                _rigidbody.linearVelocity = velocity;
+                _rig.SetVelocity(velocity);
             }
         }
 
@@ -665,8 +738,9 @@ namespace TinyTumble.Gameplay.Characters
             }
 
             position /= _holderRefs.Count;
-            _rigidbody.MovePosition(position);
-            _rigidbody.MoveRotation(Quaternion.LookRotation(_holderRefs[0].Facing, Vector3.up));
+            Rigidbody hips = _rig.Hips;
+            hips.MovePosition(position);
+            hips.MoveRotation(Quaternion.LookRotation(_holderRefs[0].Facing, Vector3.up) * _rig.RestRotation(RagdollBones.Hips));
         }
 
         /// <summary>Вырвался сам: держащие теряют его, он отскакивает и недолго неуязвим для захвата.</summary>
@@ -675,7 +749,7 @@ namespace TinyTumble.Gameplay.Characters
             Vector3 away = _holderRefs.Count > 0 ? -_holderRefs[0].Facing : -Facing;
             ReleaseFromHolders();
             EnterState(CharacterState.Stagger, now);
-            _rigidbody.linearVelocity = (away + Vector3.up).normalized * BreakFreeSpeed;
+            _rig.SetVelocity((away + Vector3.up).normalized * BreakFreeSpeed);
             _grabImmuneUntil = now + _characterConfig.GrabImmunityAfterRagdoll;
         }
 
@@ -722,189 +796,93 @@ namespace TinyTumble.Gameplay.Characters
             }
         }
 
-        // ---------- Клиент-владелец: предсказание ----------
+        // ---------- Клиент-владелец: ввод и мгновенный отклик ----------
 
-        private void OwnerTick(float now, float deltaTime)
+        private void OwnerTick(float now)
         {
-            // Запись «после кадра N» делаем в начале следующего тика: физика уже применила скорость из прошлого шага.
-            if (_predicting && _lastSubmitted != 0)
-            {
-                _sync.History.Record(_lastSubmitted, _rigidbody.position, _rigidbody.linearVelocity);
-            }
+            _networkInput.Submit(_localSource.Sample(), out PlayerInputFrame frame);
 
-            uint sequence = _networkInput.Submit(_localSource.Sample(), out PlayerInputFrame frame);
-            _lastSubmitted = sequence;
-            PlayLocalFeedback(frame, now);
-
-            if (!_sync.HasState)
-            {
-                return;
-            }
-
-            BodySnapshot latest = _sync.Latest;
-            _flags = (CharacterFlags)latest.Flags;
-            bool hostAllows = (CharacterState)latest.State == CharacterState.Normal && latest.Teleport == _seenTeleport;
-
-            if (_predicting && !hostAllows)
-            {
-                StopPredicting();
-            }
-
-            if (_predicting)
-            {
-                Reconcile(deltaTime);
-                float speed = (_flags & CharacterFlags.CarryingHeavy) != 0 ? 1f - _combatConfig.HeavyCarrySlowdown : 1f;
-                _motor.Step(frame, now, deltaTime, speed, allowDash: true);
-                _state = CharacterState.Normal;
-                return;
-            }
-
-            FollowHost(deltaTime);
-            if (hostAllows && _state == CharacterState.Normal)
-            {
-                StartPredicting(latest);
-            }
-        }
-
-        private void StartPredicting(in BodySnapshot latest)
-        {
-            // Показанное отстаёт от хоста на задержку интерполяции: прыгаем к свежему снимку, визуал догонит плавно.
-            Vector3 delta = latest.Position - _rigidbody.position;
-            _rigidbody.isKinematic = false;
-            _rigidbody.constraints = RigidbodyConstraints.FreezeRotation;
-            _rigidbody.position = latest.Position;
-            _rigidbody.linearVelocity = latest.Velocity;
-            _rigidbody.angularVelocity = Vector3.zero;
-            _motor.SetFacing(latest.Rotation * Vector3.forward);
-            _motor.ResetTransient();
-            _sync.History.Clear();
-            _sync.Corrector.Reset();
-            _presentation.AbsorbCorrection(delta);
-            _predicting = true;
-        }
-
-        private void StopPredicting()
-        {
-            _predicting = false;
-            _rigidbody.isKinematic = true;
-            _sync.History.Clear();
-            _sync.Corrector.Reset();
-        }
-
-        private void Reconcile(float deltaTime)
-        {
-            PredictionHistory history = _sync.History;
-            PredictionCorrector corrector = _sync.Corrector;
-
-            if (_sync.TryTakeUnread(out BodySnapshot snapshot) && snapshot.Ack != 0
-                && history.TryGet(snapshot.Ack, out Vector3 predicted, out Vector3 predictedVelocity))
-            {
-                if (corrector.Evaluate(snapshot.Position, predicted, out Vector3 error) == CorrectionKind.Snap)
-                {
-                    ShiftBody(error);
-                    _rigidbody.linearVelocity += snapshot.Velocity - predictedVelocity;
-                }
-            }
-
-            Vector3 step = corrector.Step(deltaTime);
-            if (step != Vector3.zero)
-            {
-                ShiftBody(step);
-            }
-        }
-
-        private void ShiftBody(Vector3 delta)
-        {
-            _rigidbody.position += delta;
-            _sync.History.Shift(delta);
-            _presentation.AbsorbCorrection(delta);
-        }
-
-        private void PlayLocalFeedback(in PlayerInputFrame frame, float now)
-        {
-            // Мгновенный отклик у владельца: замах и эмоцию видно сразу, не дожидаясь хоста.
+            // Мгновенный отклик у владельца: замах и эмоцию видно сразу, не дожидаясь снимков хоста.
             if (frame.WasPressed(PlayerButtons.Push) && (_flags & CharacterFlags.Holding) == 0 && now >= _localPushReady)
             {
                 _localPushReady = now + _combatConfig.PushCooldown;
-                _presentation.PlaySwing();
+                _localSwingStart = now;
             }
 
             int emote = CharacterCombat.PressedEmote(frame);
             if (emote >= 0 && now >= _localEmoteReady)
             {
                 _localEmoteReady = now + _combatConfig.EmoteCooldown;
-                _presentation.PlayEmote(emote);
+                _localEmote = emote;
+                _localEmoteStart = now;
             }
+        }
+
+        /// <summary>
+        /// Поверх снимков хоста руки сразу принимают позу замаха или эмоции; когда хост подтвердит её
+        /// в снимках (через пинг плюс задержку интерполяции), подмешивание гаснет.
+        /// </summary>
+        private void ApplyLocalOverlay(float now)
+        {
+            float swing = OverlayWeight(now - _localSwingStart);
+            float emote = OverlayWeight(now - _localEmoteStart);
+            float weight = Mathf.Max(swing, emote);
+            if (weight <= 0f || _state != CharacterState.Normal)
+            {
+                return;
+            }
+
+            var input = new PoseInput
+            {
+                Grounded = true,
+                State = CharacterState.Normal,
+                Flags = _flags,
+                Swing = swing > 0f ? 1f : 0f,
+                Emote = emote > 0f ? _localEmote : -1,
+                EmoteProgress = (now - _localEmoteStart) / _combatConfig.EmoteDuration,
+            };
+            _pose.Evaluate(input);
+            Quaternion[] desired = _pose.Desired;
+            _rig.BlendTowards(desired, RagdollBones.LeftUpperArm, weight);
+            _rig.BlendTowards(desired, RagdollBones.LeftLowerArm, weight);
+            _rig.BlendTowards(desired, RagdollBones.RightUpperArm, weight);
+            _rig.BlendTowards(desired, RagdollBones.RightLowerArm, weight);
+        }
+
+        private static float OverlayWeight(float age)
+        {
+            if (age < 0f || age > OverlayHold + OverlayFade)
+            {
+                return 0f;
+            }
+
+            return age <= OverlayHold ? 1f : 1f - (age - OverlayHold) / OverlayFade;
         }
 
         // ---------- Клиент: интерполяция ----------
 
         private void FollowHost(float deltaTime)
         {
-            if (!_sync.TrySample(deltaTime, out BodySnapshot snapshot))
+            if (!_sync.TrySample(deltaTime, out BodySnapshot from, out BodySnapshot to, out float t))
             {
                 return;
             }
 
-            if (snapshot.Teleport != _seenTeleport)
-            {
-                _seenTeleport = snapshot.Teleport;
-                _rigidbody.position = snapshot.Position;
-                _rigidbody.rotation = snapshot.Rotation;
-                transform.SetPositionAndRotation(snapshot.Position, snapshot.Rotation);
-                _presentation.Teleported();
-            }
-            else
-            {
-                _rigidbody.MovePosition(snapshot.Position);
-                _rigidbody.MoveRotation(snapshot.Rotation);
-            }
+            Vector3 position = Vector3.LerpUnclamped(from.Position, to.Position, t);
+            Quaternion rotation = Quaternion.Slerp(QuaternionPacking.Unpack(from.Rotation), QuaternionPacking.Unpack(to.Rotation), t);
+            _rig.ApplyPose(position, rotation, from.Pose, to.Pose, t);
 
-            _state = (CharacterState)snapshot.State;
-            _flags = (CharacterFlags)snapshot.Flags;
-            _motor.SetFacing(snapshot.Rotation * Vector3.forward);
+            _state = (CharacterState)from.State;
+            _flags = (CharacterFlags)from.Flags;
+            _motor.SetFacing(Vector3.Slerp(BodySnapshot.UnpackYaw(from.Yaw), BodySnapshot.UnpackYaw(to.Yaw), t));
         }
 
         // ---------- События для всех ----------
-
-        /// <summary>Хост: начался замах (толчок или бросок).</summary>
-        public void BroadcastSwing()
-        {
-            SwingRpc();
-        }
-
-        public void BroadcastEmote(int index)
-        {
-            EmoteRpc((byte)index);
-        }
 
         private void BroadcastHit(PlayerCharacter attacker, HitKind kind, Vector3 point, float knockback, float shakeAfter)
         {
             ulong attackerId = attacker != null ? attacker.NetworkObjectId : CharacterHit.NoAttacker;
             HitRpc(attackerId, (byte)kind, point, knockback, shakeAfter);
-        }
-
-        [Rpc(SendTo.ClientsAndHost)]
-        private void SwingRpc()
-        {
-            // Клиент-владелец уже показал замах сам.
-            if (IsOwner && !IsServer)
-            {
-                return;
-            }
-
-            _presentation.PlaySwing();
-        }
-
-        [Rpc(SendTo.ClientsAndHost)]
-        private void EmoteRpc(byte index)
-        {
-            if (IsOwner && !IsServer)
-            {
-                return;
-            }
-
-            _presentation.PlayEmote(index);
         }
 
         [Rpc(SendTo.ClientsAndHost)]
@@ -969,17 +947,6 @@ namespace TinyTumble.Gameplay.Characters
             }
 
             _presentation.SetColor(IsBot ? _matchConfig.BotColor : _matchConfig.GetPlayerColor(_slot.Value));
-        }
-
-        private void ApplyBodyDimensions()
-        {
-            _rigidbody.mass = _characterConfig.Mass;
-            if (_collider != null)
-            {
-                _collider.height = _characterConfig.CharacterHeight;
-                _collider.radius = _characterConfig.BodyRadius;
-                _collider.center = CenterOffset;
-            }
         }
     }
 }

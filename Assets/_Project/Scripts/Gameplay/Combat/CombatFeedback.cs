@@ -3,8 +3,6 @@ using System.Collections.Generic;
 using MessagePipe;
 using TinyTumble.Core.Configs;
 using TinyTumble.Core.Messages;
-using TinyTumble.Gameplay.Characters;
-using TinyTumble.Gameplay.Match;
 using Unity.Cinemachine;
 using UnityEngine;
 using VContainer;
@@ -13,8 +11,9 @@ using VContainer.Unity;
 namespace TinyTumble.Gameplay.Combat
 {
     /// <summary>
-    /// «Сочность» попаданий на каждой машине: частицы в точке удара, хит-стоп у жертвы и атакующего,
-    /// тряска общей камеры. Всё пропорционально скорости отлёта, чтобы сильный удар ощущался сильнее.
+    /// «Сочность» попаданий на каждой машине: частицы в точке удара и тряска камеры. Всё пропорционально
+    /// скорости отлёта, чтобы сильный удар ощущался сильнее. Хит-стопа нет: визуал персонажа — это его
+    /// физические кости, у хоста их нельзя «заморозить» отдельно от симуляции.
     /// Живёт в сцене Match; частицы — пул экземпляров префаба.
     /// </summary>
     public sealed class CombatFeedback : MonoBehaviour
@@ -27,16 +26,14 @@ namespace TinyTumble.Gameplay.Combat
 
         private readonly List<ParticleSystem> _pool = new List<ParticleSystem>();
         private CombatConfig _config;
-        private MatchCharacters _characters;
         private IObjectResolver _resolver;
         private IDisposable _subscription;
         private int _next;
 
         [Inject]
-        public void Construct(CombatConfig config, MatchCharacters characters, ISubscriber<CharacterHit> hits, IObjectResolver resolver)
+        public void Construct(CombatConfig config, ISubscriber<CharacterHit> hits, IObjectResolver resolver)
         {
             _config = config;
-            _characters = characters;
             _resolver = resolver;
             _subscription = hits.Subscribe(OnHit);
         }
@@ -52,17 +49,6 @@ namespace TinyTumble.Gameplay.Combat
 
         private void OnHit(CharacterHit hit)
         {
-            float hitStop = Mathf.Min(_config.MaxHitStop, hit.Knockback * _config.HitStopPerKnockback);
-            if (_characters.TryGet(hit.VictimId, out PlayerCharacter victim))
-            {
-                victim.Presentation.HitStop(hitStop);
-            }
-
-            if (hit.AttackerId != CharacterHit.NoAttacker && _characters.TryGet(hit.AttackerId, out PlayerCharacter attacker))
-            {
-                attacker.Presentation.HitStop(hitStop);
-            }
-
             EmitParticles(hit.Point, hit.Knockback);
 
             if (_impulse != null)

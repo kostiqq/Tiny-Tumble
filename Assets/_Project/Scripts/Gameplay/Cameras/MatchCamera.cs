@@ -302,9 +302,8 @@ namespace TinyTumble.Gameplay.Cameras
 
         private static Vector3 Anchor(PlayerCharacter character)
         {
-            // Центр тела, а не опора: в ragdoll персонаж крутится вокруг центра, и камеру не мотает.
-            Transform root = character.transform;
-            return root.position + root.rotation * (Vector3.up * (character.Height * 0.5f));
+            // Середина роста над видимым тазом, без поворота кости: в ragdoll тело кувыркается, и камеру не мотает.
+            return character.VisualCenter;
         }
 
         // ---------- Режим и курсор ----------
@@ -429,9 +428,9 @@ namespace TinyTumble.Gameplay.Cameras
 
         private void OnAdded(PlayerCharacter character)
         {
-            if (_group != null && character != null && _group.FindMember(character.transform) < 0)
+            if (_group != null && character != null && _group.FindMember(character.TrackingTarget) < 0)
             {
-                _group.AddMember(character.transform, _config.SharedCharacterWeight, _config.SharedCharacterRadius);
+                _group.AddMember(character.TrackingTarget, _config.SharedCharacterWeight, _config.SharedCharacterRadius);
             }
         }
 
@@ -439,7 +438,7 @@ namespace TinyTumble.Gameplay.Cameras
         {
             if (_group != null && character != null)
             {
-                _group.RemoveMember(character.transform);
+                _group.RemoveMember(character.TrackingTarget);
             }
 
             if (character == _target)

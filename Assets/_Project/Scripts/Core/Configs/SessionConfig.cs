@@ -10,7 +10,7 @@ namespace TinyTumble.Core.Configs
     public sealed class SessionConfig : ScriptableObject
     {
         [Tooltip("Увеличивайте при несовместимых изменениях сетевого протокола: клиент другой версии не войдёт.")]
-        [SerializeField, Min(1)] private int _protocolVersion = 5;
+        [SerializeField, Min(1)] private int _protocolVersion = 6;
 
         [SerializeField] private ushort _port = 7777;
 
@@ -65,14 +65,9 @@ namespace TinyTumble.Core.Configs
         [Tooltip("На сколько секунд чужие персонажи показываются в прошлом: запас на джиттер, чтобы было что интерполировать.")]
         [SerializeField, Range(0.02f, 0.5f)] private float _interpolationDelay = 0.1f;
 
-        [Tooltip("Расхождение предсказания с хостом меньше этого не исправляется, м.")]
-        [SerializeField, Min(0f)] private float _predictionTolerance = 0.03f;
-
-        [Tooltip("Расхождение больше этого исправляется сразу, а не плавно, м.")]
-        [SerializeField, Min(0.01f)] private float _predictionSnapDistance = 1.5f;
-
-        [Tooltip("Доля расхождения, убираемая за секунду при плавной коррекции.")]
-        [SerializeField, Min(0.1f)] private float _predictionCorrectionRate = 10f;
+        [Tooltip("То же для своего персонажа. Предсказания нет (физику считает только хост), поэтому запас меньше: "
+            + "отклик на ввод быстрее ценой редких остановок при джиттере.")]
+        [SerializeField, Range(0.02f, 0.5f)] private float _ownInterpolationDelay = 0.07f;
 
         [Tooltip("Хост держит у себя не больше стольких кадров ввода клиента; лишние склеивает, догоняя клиента.")]
         [SerializeField, Range(1, 16)] private int _maxBufferedInputs = 4;
@@ -95,9 +90,7 @@ namespace TinyTumble.Core.Configs
         public float MinLobbySeconds => _minLobbySeconds;
         public int SnapshotIntervalTicks => _snapshotIntervalTicks;
         public float InterpolationDelay => _interpolationDelay;
-        public float PredictionTolerance => _predictionTolerance;
-        public float PredictionSnapDistance => _predictionSnapDistance;
-        public float PredictionCorrectionRate => _predictionCorrectionRate;
+        public float OwnInterpolationDelay => _ownInterpolationDelay;
         public int MaxBufferedInputs => _maxBufferedInputs;
     }
 }

@@ -14,7 +14,7 @@ namespace TinyTumble.Gameplay.Combat
     /// модель и параметры. Симулирует хост; клиенты видят его через NetworkTransform.
     /// </summary>
     [RequireComponent(typeof(Rigidbody))]
-    public sealed class GrabbableItem : NetworkBehaviour, IGrabbable
+    public sealed class GrabbableItem : NetworkBehaviour, IGrabbable, ICollisionBody
     {
         [SerializeField] private Rigidbody _rigidbody;
         [SerializeField] private Collider _collider;
@@ -29,6 +29,7 @@ namespace TinyTumble.Gameplay.Combat
         private CombatConfig _combatConfig;
         private MatchConfig _matchConfig;
         private CollisionIgnores _ignores;
+        private Collider[] _colliders;
 
         // Только на хосте.
         private PlayerCharacter _heldBy;
@@ -37,6 +38,8 @@ namespace TinyTumble.Gameplay.Combat
         private Vector3 _respawnCenter;
 
         public Rigidbody Body => _rigidbody;
+
+        public Collider[] Colliders => _colliders ??= new[] { _collider };
 
         public bool IsHeavy => _isHeavy;
 
@@ -53,7 +56,7 @@ namespace TinyTumble.Gameplay.Combat
 
         public override void OnNetworkSpawn()
         {
-            _ignores = new CollisionIgnores(_collider);
+            _ignores = new CollisionIgnores(Colliders);
             _respawnCenter = new Vector3(0f, transform.position.y, 0f);
             _holder.OnValueChanged += OnHolderChanged;
         }
@@ -178,8 +181,8 @@ namespace TinyTumble.Gameplay.Combat
                 return;
             }
 
-            Rigidbody other = collision.rigidbody;
-            if (other == null || !other.TryGetComponent(out PlayerCharacter target) || target == _thrownBy || !target.IsTargetable)
+            PlayerCharacter target = CharacterBodyPart.OwnerOf(collision.rigidbody);
+            if (target == null || target == _thrownBy || !target.IsTargetable)
             {
                 return;
             }

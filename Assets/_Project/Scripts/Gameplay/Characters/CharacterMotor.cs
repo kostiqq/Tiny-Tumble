@@ -5,21 +5,22 @@ using UnityEngine;
 namespace TinyTumble.Gameplay.Characters
 {
     /// <summary>
-    /// Управляемое движение персонажа на Rigidbody: разгон, контроль в воздухе, прыжок с «койот-временем»
-    /// и буфером нажатия, рывок, склоны и движущиеся опоры (вращающиеся и наклоняемые арены).
-    /// Один и тот же код считает движение на хосте и предсказывает его у клиента-владельца:
-    /// при одинаковом вводе результат совпадает.
+    /// Движение физического персонажа (только хост): разгон ускорением всего тела, прыжок с «койот-временем» и буфером,
+    /// рывок, склоны и движущиеся опоры. Таз держится над опорой пружиной («ноги»), корпус — вертикально
+    /// и лицом к движению пружиной равновесия; кости ниже тянутся за ним суставами, отсюда раскачка.
+    /// Скорость всё равно задаётся мотором, поэтому управление отзывчивое, а толчки сбивают с равновесия.
     /// </summary>
     public sealed class CharacterMotor
     {
-        private const float ProbeSkin = 0.05f;
-        private const float ProbeRadiusScale = 0.9f;
         private const float JumpGroundIgnoreTime = 0.1f;
         private const float MinMoveInput = 0.01f;
+        private const float ProbeRadius = 0.08f;
+        private const int ProbeCapacity = 16;
 
-        private readonly Rigidbody _body;
+        private readonly RagdollRig _rig;
         private readonly CharacterConfig _config;
         private readonly float _minGroundDot;
+        private readonly RaycastHit[] _hits = new RaycastHit[ProbeCapacity];
 
         private Vector3 _facing = Vector3.forward;
         private float _lastGroundedTime = float.NegativeInfinity;
@@ -29,9 +30,9 @@ namespace TinyTumble.Gameplay.Characters
         private float _dashEndTime = float.NegativeInfinity;
         private Vector3 _dashDirection;
 
-        public CharacterMotor(Rigidbody body, CharacterConfig config)
+        public CharacterMotor(RagdollRig rig, CharacterConfig config)
         {
-            _body = body;
+            _rig = rig;
             _config = config;
             _minGroundDot = Mathf.Cos(config.MaxSlopeAngle * Mathf.Deg2Rad);
         }
@@ -44,6 +45,20 @@ namespace TinyTumble.Gameplay.Characters
 
         /// <summary>Скорость опоры под ногами (движущаяся платформа), иначе ноль.</summary>
         public Vector3 GroundVelocity { get; private set; }
+
+        /// <summary>От таза до опоры, м; бесконечность, если опоры нет.</summary>
+        public float GroundDistance { get; private set; } = float.PositiveInfinity;
+
+        /// <summary>Скорость по горизонтали относительно опоры: по ней шагают ноги.</summary>
+        public Vector3 PlanarVelocity
+        {
+            get
+            {
+                Vector3 velocity = _rig.Hips.linearVelocity - GroundVelocity;
+                velocity.y = 0f;
+                return velocity;
+            }
+        }
 
         public bool IsDashing(float now)
         {
@@ -78,35 +93,59 @@ namespace TinyTumble.Gameplay.Characters
             IsGrounded = false;
             GroundNormal = Vector3.up;
             GroundVelocity = Vector3.zero;
+            GroundDistance = float.PositiveInfinity;
             if (now < _ignoreGroundUntil)
             {
                 return;
             }
 
-            float radius = _config.BodyRadius * ProbeRadiusScale;
-            // Луч начинается внутри своей капсулы: такие коллайдеры SphereCast пропускает, себя мы не найдём.
-            Vector3 origin = _body.position + Vector3.up * (_config.BodyRadius + ProbeSkin);
-            float distance = _config.BodyRadius - radius + ProbeSkin + _config.GroundProbeDistance;
-            if (!Physics.SphereCast(origin, radius, Vector3.down, out RaycastHit hit, distance,
-                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            // Луч начинается выше таза на высоту ног: даже если таз просел до пола (жёсткое приземление),
+            // сфера не стартует внутри стола. Касание на старте луча Unity отдаёт с нулевой дистанцией,
+            // его не отличить от своих костей — опора «пропала» бы, и пружина ног не подняла бы таз.
+            Rigidbody hips = _rig.Hips;
+            float lift = _rig.RideHeight;
+            float reach = lift + _rig.RideHeight + _config.GroundProbeDistance;
+            int count = Physics.SphereCastNonAlloc(hips.position + Vector3.up * lift, ProbeRadius, Vector3.down, _hits, reach,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
+
+            int nearest = -1;
+            float nearestDistance = float.PositiveInfinity;
+            for (int i = 0; i < count; i++)
+            {
+                RaycastHit hit = _hits[i];
+                // Луч начинается внутри своего таза: свои кости пропускаем.
+                if (hit.distance <= 0f || (hit.rigidbody != null && _rig.Owns(hit.rigidbody)))
+                {
+                    continue;
+                }
+
+                if (hit.distance < nearestDistance)
+                {
+                    nearestDistance = hit.distance;
+                    nearest = i;
+                }
+            }
+
+            if (nearest < 0)
             {
                 return;
             }
 
-            if (Vector3.Dot(hit.normal, Vector3.up) < _minGroundDot)
+            RaycastHit ground = _hits[nearest];
+            GroundDistance = ground.distance + ProbeRadius - lift;
+            if (Vector3.Dot(ground.normal, Vector3.up) < _minGroundDot)
             {
                 return;
             }
 
             IsGrounded = true;
             _lastGroundedTime = now;
-            GroundNormal = hit.normal;
+            GroundNormal = ground.normal;
 
-            Rigidbody platform = hit.rigidbody;
-            if (platform != null && platform != _body)
+            Rigidbody platform = ground.rigidbody;
+            if (platform != null)
             {
-                Vector3 platformVelocity = platform.GetPointVelocity(hit.point);
-                GroundVelocity = platformVelocity;
+                GroundVelocity = platform.GetPointVelocity(ground.point);
 
                 // Вращающаяся опора поворачивает и персонажа, иначе он «буксует» на месте.
                 float yaw = platform.angularVelocity.y * Mathf.Rad2Deg * Time.fixedDeltaTime;
@@ -126,16 +165,13 @@ namespace TinyTumble.Gameplay.Characters
             var move = new Vector3(frame.Move.x, 0f, frame.Move.y);
             if (move.sqrMagnitude > MinMoveInput * MinMoveInput)
             {
-                Vector3 desired = move.normalized;
-                _facing = Vector3.RotateTowards(_facing, desired, _config.TurnSpeed * Mathf.Deg2Rad * deltaTime, 0f);
+                _facing = Vector3.RotateTowards(_facing, move.normalized, _config.TurnSpeed * Mathf.Deg2Rad * deltaTime, 0f);
             }
 
             if (frame.WasPressed(PlayerButtons.Jump))
             {
                 _jumpBufferedUntil = now + _config.JumpBuffer;
             }
-
-            Vector3 velocity = _body.linearVelocity;
 
             if (allowDash && frame.WasPressed(PlayerButtons.Dash) && now >= _dashReadyTime && !IsDashing(now))
             {
@@ -145,69 +181,120 @@ namespace TinyTumble.Gameplay.Characters
                 _dashReadyTime = now + _config.DashCooldown;
             }
 
+            Rigidbody hips = _rig.Hips;
+            Vector3 velocity = hips.linearVelocity;
+            Vector3 planar = new Vector3(velocity.x, 0f, velocity.z);
+            Vector3 groundPlanar = new Vector3(GroundVelocity.x, 0f, GroundVelocity.z);
+
             if (IsDashing(now))
             {
-                velocity.x = _dashDirection.x * _config.DashSpeed + GroundVelocity.x;
-                velocity.z = _dashDirection.z * _config.DashSpeed + GroundVelocity.z;
+                // Рывок задаёт скорость всему телу сразу: иначе конечности отстали бы и «выдернули» таз.
+                Vector3 dash = _dashDirection * _config.DashSpeed + groundPlanar;
+                _rig.AddVelocity(dash - planar);
             }
             else
             {
-                Vector3 target = move * (_config.MoveSpeed * speedMultiplier) + new Vector3(GroundVelocity.x, 0f, GroundVelocity.z);
+                Vector3 target = move * (_config.MoveSpeed * speedMultiplier) + groundPlanar;
                 float acceleration = IsGrounded ? _config.Acceleration : _config.AirAcceleration;
                 float blend = 1f - Mathf.Exp(-acceleration * deltaTime);
-
-                if (IsGrounded)
-                {
-                    // На склоне идём вдоль поверхности: без проекции вниз по склону персонаж подпрыгивал бы.
-                    Vector3 alongSlope = Vector3.ProjectOnPlane(target, GroundNormal);
-                    if (alongSlope.sqrMagnitude > 1e-6f)
-                    {
-                        alongSlope = alongSlope.normalized * target.magnitude;
-                    }
-
-                    alongSlope.y += GroundVelocity.y;
-                    velocity = Vector3.Lerp(velocity, alongSlope, blend);
-                }
-                else
-                {
-                    velocity.x = Mathf.Lerp(velocity.x, target.x, blend);
-                    velocity.z = Mathf.Lerp(velocity.z, target.z, blend);
-                }
+                Vector3 desired = Vector3.Lerp(planar, target, blend);
+                Vector3 push = Vector3.ClampMagnitude((desired - planar) / deltaTime, _config.MaxMoveAcceleration);
+                // Ускорение всем костям — как сила в центре масс: верхнетяжёлое тело не опрокидывается
+                // от разгона, а раскачивается только за счёт податливости суставов.
+                _rig.AddAcceleration(push);
             }
 
             bool canJump = now - _lastGroundedTime <= _config.CoyoteTime;
             if (now <= _jumpBufferedUntil && canJump)
             {
-                velocity.y = _config.JumpVelocity + Mathf.Max(0f, GroundVelocity.y);
+                float jump = _config.JumpVelocity + Mathf.Max(0f, GroundVelocity.y);
+                _rig.AddVelocity(Vector3.up * (jump - velocity.y));
                 _jumpBufferedUntil = float.NegativeInfinity;
                 _lastGroundedTime = float.NegativeInfinity;
-                // Сразу после отрыва проба ещё видит пол: без паузы прыжок «прилипал» бы обратно.
+                // Сразу после отрыва проба ещё видит пол: без паузы пружина ног вернула бы тело вниз.
                 _ignoreGroundUntil = now + JumpGroundIgnoreTime;
                 IsGrounded = false;
             }
 
-            if (IsGrounded)
-            {
-                // Гравитация вдоль склона: без компенсации стоящий персонаж медленно съезжал бы.
-                velocity -= Vector3.ProjectOnPlane(Physics.gravity, GroundNormal) * deltaTime;
-            }
-            else
-            {
-                ApplyFallGravity(ref velocity, deltaTime);
-            }
-
-            _body.linearVelocity = velocity;
-            _body.angularVelocity = Vector3.zero;
-            _body.MoveRotation(Quaternion.LookRotation(_facing, Vector3.up));
+            Coast();
         }
 
-        /// <summary>Падение тяжелее подъёма: прыжок и отлёт читаются чётче. Используется и без управления.</summary>
-        public void ApplyFallGravity(ref Vector3 velocity, float deltaTime)
+        /// <summary>Без управления: только тяжёлое падение.</summary>
+        public void Coast()
         {
-            if (velocity.y < 0f)
+            if (!IsGrounded && _rig.Hips.linearVelocity.y < 0f)
             {
-                velocity += Physics.gravity * ((_config.FallGravityMultiplier - 1f) * deltaTime);
+                // Падение тяжелее подъёма: прыжок и отлёт читаются чётче.
+                _rig.AddAcceleration(Physics.gravity * (_config.FallGravityMultiplier - 1f));
             }
+        }
+
+        /// <summary>
+        /// Пружины, которые держат персонажа на ногах: таз на высоте над опорой и корпус (таз, грудь, голова) вертикально лицом
+        /// к <see cref="Facing"/>. <paramref name="balance"/> и <paramref name="ride"/> — доля силы (0 — обмяк).
+        /// </summary>
+        /// <param name="desired">Поза в осях персонажа: из неё берётся наклон груди (поклон, покачивание).</param>
+        /// <param name="yawOffset">Доворот вокруг вертикали, град (пируэт).</param>
+        public void Support(float balance, float ride, Quaternion[] desired, float yawOffset)
+        {
+            Rigidbody hips = _rig.Hips;
+            if (hips.isKinematic)
+            {
+                return;
+            }
+
+            if (ride > 0f && IsGrounded)
+            {
+                float frequency = _config.RideFrequency;
+                float error = _rig.RideHeight - GroundDistance;
+                float relativeSpeed = hips.linearVelocity.y - GroundVelocity.y;
+                float spring = frequency * frequency * error - 2f * _config.RideDamping * frequency * relativeSpeed;
+                // Ноги держат вес всего тела; тянуть вниз сильнее гравитации пружина не должна.
+                // Поддержка всем костям сразу: суставы не провисают под весом, корпус не клонит.
+                float lift = Mathf.Max(0f, spring - Physics.gravity.y) * ride;
+                _rig.AddAcceleration(Vector3.up * lift);
+            }
+
+            if (balance > 0f)
+            {
+                Quaternion frame = Quaternion.Euler(0f, yawOffset, 0f) * Quaternion.LookRotation(_facing, Vector3.up);
+                Vector3 hipsAcceleration = DriveRotation(hips, frame * desired[RagdollBones.Hips], balance);
+                // Разворот корпуса передаётся конечностям сразу: приводам суставов остаётся держать позу,
+                // а не догонять корпус (иначе на резком развороте руки и ноги отстают и разлетаются).
+                Vector3 yaw = Vector3.Project(hipsAcceleration, Vector3.up);
+                for (int i = RagdollBones.LeftUpperArm; i < RagdollBones.Count; i++)
+                {
+                    _rig.Body(i).AddTorque(yaw, ForceMode.Acceleration);
+                }
+
+                DriveRotation(_rig.Body(RagdollBones.Chest), frame * desired[RagdollBones.Chest], balance);
+                // Голова тяжёлая и висит на суставе: без своей пружины она раскачивает и опрокидывает корпус.
+                DriveRotation(_rig.Body(RagdollBones.Head), frame * desired[RagdollBones.Head], balance);
+            }
+        }
+
+        /// <summary>Пружина-демпфер к целевому повороту; ускорение не зависит от массы и инерции кости.</summary>
+        /// <returns>Приложенное угловое ускорение.</returns>
+        private Vector3 DriveRotation(Rigidbody body, Quaternion target, float strength)
+        {
+            Quaternion delta = target * Quaternion.Inverse(body.rotation);
+            if (delta.w < 0f)
+            {
+                delta = new Quaternion(-delta.x, -delta.y, -delta.z, -delta.w);
+            }
+
+            delta.ToAngleAxis(out float angle, out Vector3 axis);
+            Vector3 error = Vector3.zero;
+            if (angle > 1e-3f && !float.IsInfinity(axis.x) && !float.IsNaN(axis.x))
+            {
+                error = axis.normalized * (angle * Mathf.Deg2Rad);
+            }
+
+            float frequency = _config.BalanceFrequency;
+            Vector3 acceleration = frequency * frequency * error - 2f * _config.BalanceDamping * frequency * body.angularVelocity;
+            acceleration *= strength;
+            body.AddTorque(acceleration, ForceMode.Acceleration);
+            return acceleration;
         }
     }
 }

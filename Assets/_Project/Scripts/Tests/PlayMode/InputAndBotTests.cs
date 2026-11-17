@@ -78,21 +78,21 @@ namespace TinyTumble.Tests
 
             Assert.IsNotNull(bot, "Bot was not spawned.");
             Assert.IsTrue(bot.IsBot, "Bots are spawned after players.");
-            Vector3 start = bot.transform.position;
+            Vector3 start = bot.Position;
             float travelled = 0f;
             Vector3 previous = start;
             float end = Time.time + BotObservationSeconds;
             while (Time.time < end)
             {
                 await UniTask.Yield();
-                Vector3 current = bot.transform.position;
+                Vector3 current = bot.Position;
                 travelled += Vector3.Distance(previous, current);
                 previous = current;
             }
 
             var config = Object.FindAnyObjectByType<RootLifetimeScope>().Container.Resolve<MatchConfig>();
             Assert.Greater(travelled, MinBotTravel, "Bot did not move.");
-            Assert.Greater(bot.transform.position.y, config.EliminationHeight, "Bot fell off the table.");
+            Assert.Greater(bot.Position.y, config.EliminationHeight, "Bot fell off the table.");
             Assert.IsTrue(bot.gameObject.activeSelf);
         });
 
