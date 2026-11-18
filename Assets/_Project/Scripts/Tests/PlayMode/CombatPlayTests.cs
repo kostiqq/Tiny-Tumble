@@ -72,14 +72,14 @@ namespace TinyTumble.Tests
 
             PlayerCharacter target = match.Characters[0];
             var config = FindRoot().Resolve<CharacterConfig>();
-            Vector3 towardCenter = -new Vector3(target.Body.position.x, 0f, target.Body.position.z);
+            Vector3 towardCenter = -new Vector3(target.Position.x, 0f, target.Position.z);
 
-            target.ReceiveHit(10f, towardCenter, null, HitKind.Push, forceRagdoll: true, target.Body.position);
+            target.ReceiveHit(10f, towardCenter, null, HitKind.Push, forceRagdoll: true, target.Position);
 
             Assert.AreEqual(CharacterState.Ragdoll, target.State);
             Assert.AreEqual(10f, target.Shake.CurrentValue, 1e-4f);
 
-            float limit = config.MaxRagdollTime + config.GetUpDuration + GetUpMargin;
+            float limit = config.MaxRagdollTime + config.MaxGetUpTime + GetUpMargin;
             float deadline = Time.time + limit;
             while (target != null && target.State != CharacterState.Normal && Time.time < deadline)
             {
@@ -88,7 +88,7 @@ namespace TinyTumble.Tests
 
             Assert.IsNotNull(target, "Knocked toward the center, the character must stay on the table.");
             Assert.AreEqual(CharacterState.Normal, target.State, $"Ragdoll must end within {limit:0.0} s.");
-            Assert.Greater(Vector3.Dot(target.transform.up, Vector3.up), 0.95f, "Back on the feet means upright.");
+            Assert.Greater(Vector3.Dot(target.Up, Vector3.up), 0.8f, "Back on the feet means the hips are upright.");
         });
     }
 }

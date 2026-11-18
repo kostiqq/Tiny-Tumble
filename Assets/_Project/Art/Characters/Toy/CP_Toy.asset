@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 32f5881a777e4e441ad02b4af597606c, type: 3}
+  m_Name: CP_Toy
+  m_EditorClassIdentifier: TinyTumble.Core::TinyTumble.Core.Configs.CharacterProfile
+  _model: {fileID: 919132149155446097, guid: 3adddde19c22b714ea8b96a1a6520efb, type: 3}
+  _address: Character_Capsule
+  _height: 1
+  _hipsRadius: 0.11
+  _chestRadius: 0.13
+  _headRadius: 0
+  _armRadius: 0.045
+  _legRadius: 0.055
+  _hipsMass: 0.25
+  _chestMass: 0.25
+  _headMass: 0.12
+  _upperArmMass: 0.04
+  _lowerArmMass: 0.035
+  _upperLegMass: 0.06
+  _lowerLegMass: 0.05
+  _spineLimits: {x: 25, y: 35}
+  _headLimits: {x: 50, y: 45}
+  _upperArmLimits: {x: 60, y: 160}
+  _lowerArmLimits: {x: 60, y: 130}
+  _upperLegLimits: {x: 30, y: 100}
+  _lowerLegLimits: {x: 15, y: 120}

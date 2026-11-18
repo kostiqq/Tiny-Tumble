@@ -55,45 +55,53 @@ namespace TinyTumble.Networking.Sync
             return true;
         }
 
-        public bool TrySample(float deltaTime, float delay, out BodySnapshot result)
+        /// <summary>
+        /// Пара снимков вокруг показываемого момента и доля между ними. Позицию, повороты и кости интерполирует
+        /// вызывающий; дискретные поля (состояние, флаги) брать из <paramref name="from"/>: переход виден в свой момент.
+        /// Новых снимков нет — недолго продолжаем движение по скорости: <paramref name="from"/> и <paramref name="to"/> совпадают.
+        /// </summary>
+        public bool TrySample(float deltaTime, float delay, out BodySnapshot from, out BodySnapshot to, out float t)
         {
             if (_count == 0)
             {
-                result = default;
+                from = default;
+                to = default;
+                t = 0f;
                 return false;
             }
 
             AdvanceClock(deltaTime, delay);
+            t = 0f;
 
             if (_renderTime <= _buffer[0].Time)
             {
-                result = _buffer[0];
+                from = _buffer[0];
+                to = from;
                 return true;
             }
 
-            int from = _count - 1;
-            while (from > 0 && _buffer[from].Time > _renderTime)
+            int index = _count - 1;
+            while (index > 0 && _buffer[index].Time > _renderTime)
             {
-                from--;
+                index--;
             }
 
-            if (from == _count - 1)
+            if (index == _count - 1)
             {
-                // Новых снимков нет: недолго продолжаем движение по скорости, дальше стоим.
-                result = _buffer[from];
-                double ahead = System.Math.Min(_renderTime - result.Time, MaxExtrapolation);
-                result.Position += result.Velocity * (float)ahead;
+                from = _buffer[index];
+                double ahead = System.Math.Min(_renderTime - from.Time, MaxExtrapolation);
+                from.Position += from.Velocity * (float)ahead;
+                to = from;
             }
             else
             {
-                BodySnapshot a = _buffer[from];
-                BodySnapshot b = _buffer[from + 1];
-                float t = (float)((_renderTime - a.Time) / (b.Time - a.Time));
-                result = BodySnapshot.Lerp(a, b, Mathf.Clamp01(t));
+                from = _buffer[index];
+                to = _buffer[index + 1];
+                t = Mathf.Clamp01((float)((_renderTime - from.Time) / (to.Time - from.Time)));
             }
 
             // Всё, что старше текущей пары, уже не понадобится.
-            Discard(from);
+            Discard(index);
             return true;
         }
 

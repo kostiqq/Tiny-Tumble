@@ -4,6 +4,12 @@ using UnityEngine;
 
 namespace TinyTumble.Gameplay.Combat
 {
+    /// <summary>Сетевой объект из нескольких коллайдеров (персонаж — по коллайдеру на кость).</summary>
+    public interface ICollisionBody
+    {
+        Collider[] Colliders { get; }
+    }
+
     /// <summary>
     /// Отключённые столкновения объекта с теми, кто его держит. После броска столкновения возвращаются
     /// не сразу, а через паузу: иначе брошенное зацепилось бы за бросившего.
@@ -13,14 +19,14 @@ namespace TinyTumble.Gameplay.Combat
     {
         private struct Entry
         {
-            public Collider Other;
+            public Collider[] Other;
             public float RestoreAt;
         }
 
-        private readonly Collider _self;
+        private readonly Collider[] _self;
         private readonly List<Entry> _entries = new List<Entry>(GrabLinks.Capacity);
 
-        public CollisionIgnores(Collider self)
+        public CollisionIgnores(Collider[] self)
         {
             _self = self;
         }
@@ -31,18 +37,18 @@ namespace TinyTumble.Gameplay.Combat
             for (int i = 0; i < GrabLinks.Capacity; i++)
             {
                 ulong id = previous[i];
-                if (id != GrabLinks.None && !current.Contains(id) && TryGetCollider(manager, id, out Collider collider))
+                if (id != GrabLinks.None && !current.Contains(id) && TryGetColliders(manager, id, out Collider[] colliders))
                 {
-                    RestoreLater(collider, now + restoreDelay);
+                    RestoreLater(colliders, now + restoreDelay);
                 }
             }
 
             for (int i = 0; i < GrabLinks.Capacity; i++)
             {
                 ulong id = current[i];
-                if (id != GrabLinks.None && TryGetCollider(manager, id, out Collider collider))
+                if (id != GrabLinks.None && TryGetColliders(manager, id, out Collider[] colliders))
                 {
-                    Ignore(collider);
+                    Ignore(colliders);
                 }
             }
         }
@@ -57,11 +63,7 @@ namespace TinyTumble.Gameplay.Combat
                     continue;
                 }
 
-                if (entry.Other != null && _self != null)
-                {
-                    Physics.IgnoreCollision(_self, entry.Other, false);
-                }
-
+                SetIgnored(entry.Other, false);
                 _entries.RemoveAt(i);
             }
         }
@@ -70,23 +72,20 @@ namespace TinyTumble.Gameplay.Combat
         {
             for (int i = 0; i < _entries.Count; i++)
             {
-                if (_entries[i].Other != null && _self != null)
-                {
-                    Physics.IgnoreCollision(_self, _entries[i].Other, false);
-                }
+                SetIgnored(_entries[i].Other, false);
             }
 
             _entries.Clear();
         }
 
-        private void Ignore(Collider other)
+        private void Ignore(Collider[] other)
         {
             if (other == _self || _self == null)
             {
                 return;
             }
 
-            Physics.IgnoreCollision(_self, other, true);
+            SetIgnored(other, true);
             int index = IndexOf(other);
             var entry = new Entry { Other = other, RestoreAt = float.PositiveInfinity };
             if (index >= 0)
@@ -99,7 +98,7 @@ namespace TinyTumble.Gameplay.Combat
             }
         }
 
-        private void RestoreLater(Collider other, float at)
+        private void RestoreLater(Collider[] other, float at)
         {
             int index = IndexOf(other);
             if (index >= 0)
@@ -108,7 +107,32 @@ namespace TinyTumble.Gameplay.Combat
             }
         }
 
-        private int IndexOf(Collider other)
+        private void SetIgnored(Collider[] other, bool ignored)
+        {
+            if (other == null || _self == null)
+            {
+                return;
+            }
+
+            for (int a = 0; a < _self.Length; a++)
+            {
+                Collider self = _self[a];
+                if (self == null)
+                {
+                    continue;
+                }
+
+                for (int b = 0; b < other.Length; b++)
+                {
+                    if (other[b] != null)
+                    {
+                        Physics.IgnoreCollision(self, other[b], ignored);
+                    }
+                }
+            }
+        }
+
+        private int IndexOf(Collider[] other)
         {
             for (int i = 0; i < _entries.Count; i++)
             {
@@ -121,17 +145,19 @@ namespace TinyTumble.Gameplay.Combat
             return -1;
         }
 
-        private static bool TryGetCollider(NetworkManager manager, ulong networkObjectId, out Collider collider)
+        private static bool TryGetColliders(NetworkManager manager, ulong networkObjectId, out Collider[] colliders)
         {
-            collider = null;
+            colliders = null;
             if (manager == null || manager.SpawnManager == null
                 || !manager.SpawnManager.SpawnedObjects.TryGetValue(networkObjectId, out NetworkObject networkObject)
-                || networkObject == null)
+                || networkObject == null
+                || !networkObject.TryGetComponent(out ICollisionBody body))
             {
                 return false;
             }
 
-            return networkObject.TryGetComponent(out collider);
+            colliders = body.Colliders;
+            return colliders != null;
         }
     }
 }

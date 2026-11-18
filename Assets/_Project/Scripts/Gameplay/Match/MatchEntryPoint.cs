@@ -8,6 +8,7 @@ using TinyTumble.Core.Input;
 using TinyTumble.Core.Logging;
 using TinyTumble.Core.Network;
 using TinyTumble.Core.Scenes;
+using TinyTumble.Gameplay.Cameras;
 using TinyTumble.Gameplay.Characters;
 using TinyTumble.Networking.Lobby;
 using Unity.Netcode;
@@ -36,6 +37,7 @@ namespace TinyTumble.Gameplay.Match
         private readonly IObjectResolver _resolver;
         private readonly ILoadingScreen _loadingScreen;
         private readonly ILocalPlayers _localPlayers;
+        private readonly CameraMoveFrame _moveFrame;
         private readonly IBotInputFactory _botInputFactory;
         private readonly INetworkSession _session;
         private readonly SessionLobby _lobby;
@@ -57,6 +59,7 @@ namespace TinyTumble.Gameplay.Match
             IObjectResolver resolver,
             ILoadingScreen loadingScreen,
             ILocalPlayers localPlayers,
+            CameraMoveFrame moveFrame,
             IBotInputFactory botInputFactory,
             INetworkSession session,
             SessionLobby lobby,
@@ -72,6 +75,7 @@ namespace TinyTumble.Gameplay.Match
             _resolver = resolver;
             _loadingScreen = loadingScreen;
             _localPlayers = localPlayers;
+            _moveFrame = moveFrame;
             _botInputFactory = botInputFactory;
             _session = session;
             _lobby = lobby;
@@ -260,7 +264,8 @@ namespace TinyTumble.Gameplay.Match
             {
                 if (players[i].Index == slot.LocalIndex)
                 {
-                    return players[i].Input;
+                    // Локальный игрок хоста ходит относительно своей камеры, как и клиент (см. PlayerCharacter).
+                    return CameraRelativeInput.Wrap(players[i].Input, _moveFrame);
                 }
             }
 

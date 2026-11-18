@@ -9,9 +9,9 @@ namespace TinyTumble.Gameplay.Combat
 {
     /// <summary>
     /// Действия персонажа, которые решает только хост (раздел 4 GDD):
-    /// толчок с замахом и окном попадания, парирование таймингом, захват предмета или игрока,
-    /// бросок с зарядкой, эмоции. Клиент-владелец показывает замах и эмоцию сразу у себя,
-    /// а попадания приходят от хоста.
+    /// толчок с замахом и окном попадания (засчитывается касанием кисти), парирование таймингом,
+    /// захват предмета или игрока, бросок с зарядкой, эмоции. Клиент-владелец показывает замах и эмоцию
+    /// сразу у себя, а попадания приходят от хоста.
     /// Управление: «Толчок» — толчок; с чем-то в руках удержание «Толчка» заряжает бросок, отпускание бросает.
     /// «Захват» — схватить ближайшее перед собой или положить то, что в руках. «Парирование» — короткое окно.
     /// </summary>
@@ -29,10 +29,13 @@ namespace TinyTumble.Gameplay.Combat
 
         private readonly PlayerCharacter _owner;
         private readonly CombatConfig _config;
-        private readonly List<Rigidbody> _hitThisSwing = new List<Rigidbody>(OverlapCapacity);
+        // Кого уже задели этим толчком: персонажа (у него много костей) или тело предмета.
+        private readonly List<Object> _hitThisSwing = new List<Object>(OverlapCapacity);
 
         private float _swingStart = float.NegativeInfinity;
         private bool _swinging;
+        private bool _lunged;
+        private float _poseSwingStart = float.NegativeInfinity;
         private float _pushReadyTime;
         private float _parryUntil = float.NegativeInfinity;
         private bool _parryPending;
@@ -59,6 +62,29 @@ namespace TinyTumble.Gameplay.Combat
         public bool IsSwinging => _swinging;
 
         public bool IsChargingThrow => _charging;
+
+        /// <summary>Вес позы «руки вперёд» 0..1: растёт в замахе, держится в окне попадания, затем спадает.</summary>
+        public float SwingWeight(float now)
+        {
+            float elapsed = now - _poseSwingStart;
+            if (elapsed < 0f)
+            {
+                return 0f;
+            }
+
+            if (elapsed < _config.PushWindup)
+            {
+                return elapsed / _config.PushWindup;
+            }
+
+            float active = _config.PushWindup + _config.PushActiveTime;
+            if (elapsed <= active)
+            {
+                return 1f;
+            }
+
+            return Mathf.Clamp01(1f - (elapsed - active) / _config.PushRecovery);
+        }
 
         public bool IsParrying(float now)
         {
@@ -119,7 +145,7 @@ namespace TinyTumble.Gameplay.Combat
         /// <summary>Куда ставить удерживаемое: над головой, чуть впереди.</summary>
         public Vector3 HoldPosition(float bottomOffset)
         {
-            return _owner.Body.position
+            return _owner.Position
                 + Vector3.up * (_owner.Height + _config.HoldHeight + bottomOffset)
                 + _owner.Facing * _config.HoldForward;
         }
@@ -158,10 +184,11 @@ namespace TinyTumble.Gameplay.Combat
             if (frame.WasPressed(PlayerButtons.Push) && !_swinging && now >= _pushReadyTime && now >= _actionLockUntil)
             {
                 _swinging = true;
+                _lunged = false;
                 _swingStart = now;
+                _poseSwingStart = now;
                 _pushReadyTime = now + _config.PushCooldown;
                 _hitThisSwing.Clear();
-                _owner.BroadcastSwing();
             }
 
             if (!_swinging)
@@ -181,51 +208,57 @@ namespace TinyTumble.Gameplay.Combat
                 return;
             }
 
-            ResolvePushHits(now);
+            if (!_lunged)
+            {
+                // Подаёмся вперёд в начале окна: попадание — это касание кисти, рука должна дотянуться.
+                _lunged = true;
+                _owner.Lunge(_owner.Facing * _config.PushLunge);
+            }
         }
 
-        private void ResolvePushHits(float now)
+        /// <summary>
+        /// Хост: кисть коснулась тела. В окне попадания толчка это удар: один раз на цель за толчок.
+        /// </summary>
+        public void OnHandContact(Rigidbody body, Vector3 point, float now)
         {
-            Vector3 origin = _owner.Body.position + Vector3.up * (_owner.Height * 0.5f);
-            Vector3 center = origin + _owner.Facing * _config.PushReach;
-            int count = Physics.OverlapSphereNonAlloc(center, _config.PushRadius, s_overlap, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
-            for (int i = 0; i < count; i++)
+            float elapsed = now - _swingStart;
+            if (!_swinging || elapsed < _config.PushWindup || elapsed > _config.PushWindup + _config.PushActiveTime)
             {
-                Rigidbody body = s_overlap[i].attachedRigidbody;
-                if (body == null || body == _owner.Body || _hitThisSwing.Contains(body))
-                {
-                    continue;
-                }
-
-                _hitThisSwing.Add(body);
-                Vector3 point = s_overlap[i].ClosestPoint(center);
-
-                if (body.TryGetComponent(out PlayerCharacter target))
-                {
-                    if (!target.IsTargetable || ReferenceEquals(Held, target))
-                    {
-                        continue;
-                    }
-
-                    if (target.Combat.IsParrying(now))
-                    {
-                        // Парирование: атакующего отбрасывает, цель не страдает.
-                        target.Combat.OnParrySucceeded();
-                        _swinging = false;
-                        Vector3 back = CombatRules.PushDirection(target.Facing, target.Body.position, _owner.Body.position);
-                        _owner.ReceiveHit(_config.ParryReflectShake, back, target, HitKind.Parried, forceRagdoll: true, point);
-                        return;
-                    }
-
-                    Vector3 direction = CombatRules.PushDirection(_owner.Facing, _owner.Body.position, target.Body.position);
-                    target.ReceiveHit(_config.PushShake, direction, _owner, HitKind.Push, forceRagdoll: false, point);
-                }
-                else if (body.TryGetComponent(out GrabbableItem item))
-                {
-                    Vector3 direction = CombatRules.PushDirection(_owner.Facing, _owner.Body.position, body.position);
-                    item.Push(direction * _config.PushItemSpeed + Vector3.up * (_config.PushItemSpeed * _config.KnockbackLift));
-                }
+                return;
             }
+
+            PlayerCharacter target = CharacterBodyPart.OwnerOf(body);
+            if (target != null)
+            {
+                if (target == _owner || _hitThisSwing.Contains(target) || !target.IsTargetable || ReferenceEquals(Held, target))
+                {
+                    return;
+                }
+
+                _hitThisSwing.Add(target);
+                if (target.Combat.IsParrying(now))
+                {
+                    // Парирование: атакующего отбрасывает, цель не страдает.
+                    target.Combat.OnParrySucceeded();
+                    _swinging = false;
+                    Vector3 back = CombatRules.PushDirection(target.Facing, target.Position, _owner.Position);
+                    _owner.ReceiveHit(_config.ParryReflectShake, back, target, HitKind.Parried, forceRagdoll: true, point);
+                    return;
+                }
+
+                Vector3 direction = CombatRules.PushDirection(_owner.Facing, _owner.Position, target.Position);
+                target.ReceiveHit(_config.PushShake, direction, _owner, HitKind.Push, forceRagdoll: false, point);
+                return;
+            }
+
+            if (_hitThisSwing.Contains(body) || !body.TryGetComponent(out GrabbableItem item))
+            {
+                return;
+            }
+
+            _hitThisSwing.Add(body);
+            Vector3 pushDirection = CombatRules.PushDirection(_owner.Facing, _owner.Position, body.position);
+            item.Push(pushDirection * _config.PushItemSpeed + Vector3.up * (_config.PushItemSpeed * _config.KnockbackLift));
         }
 
         private void StepGrab(in PlayerInputFrame frame, float now)
@@ -276,12 +309,13 @@ namespace TinyTumble.Gameplay.Combat
             float speed = CombatRules.ThrowSpeed(chargeSeconds, _config);
             Vector3 velocity = CombatRules.ThrowVelocity(_owner.Facing, speed, _config);
             held.OnReleased(_owner, velocity, thrown: true, now);
-            _owner.BroadcastSwing();
+            // Руки сразу в позе «вперёд» и плавно возвращаются: видно, что бросили.
+            _poseSwingStart = now - _config.PushWindup;
         }
 
         private IGrabbable FindGrabTarget(float now)
         {
-            Vector3 origin = _owner.Body.position + Vector3.up * (_owner.Height * 0.5f);
+            Vector3 origin = _owner.Position + Vector3.up * (_owner.Height * 0.5f);
             Vector3 center = origin + _owner.Facing * _config.GrabReach;
             int count = Physics.OverlapSphereNonAlloc(center, _config.GrabRadius, s_overlap, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore);
 
@@ -290,12 +324,19 @@ namespace TinyTumble.Gameplay.Combat
             for (int i = 0; i < count; i++)
             {
                 Rigidbody body = s_overlap[i].attachedRigidbody;
-                if (body == null || body == _owner.Body || !body.TryGetComponent(out IGrabbable grabbable))
+                if (body == null)
                 {
                     continue;
                 }
 
-                if (!grabbable.CanBeGrabbedBy(_owner, now))
+                // Персонаж — это несколько костей: берём его целиком, а не кость.
+                IGrabbable grabbable = CharacterBodyPart.OwnerOf(body);
+                if (grabbable == null && !body.TryGetComponent(out grabbable))
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(grabbable, _owner) || !grabbable.CanBeGrabbedBy(_owner, now))
                 {
                     continue;
                 }
@@ -323,7 +364,7 @@ namespace TinyTumble.Gameplay.Combat
                 if (frame.WasPressed(s_emoteButtons[i]))
                 {
                     _emoteReadyTime = now + _config.EmoteCooldown;
-                    _owner.BroadcastEmote(i);
+                    _owner.StartEmote(i);
                     return;
                 }
             }

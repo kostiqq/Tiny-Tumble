@@ -18,7 +18,7 @@ MonoBehaviour:
   _arriveDistance: 0.4
   _aggressionDelay: 2.5
   _aggroRange: 8
-  _pushRange: 1.1
+  _pushRange: 0.75
   _dashRange: 3
   _dashChance: 0.25
   _edgeRetreatRadius: 3.8
